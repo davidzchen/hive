@@ -479,7 +479,7 @@ public class HCatUtil {
 
   @InterfaceAudience.Private
   @InterfaceStability.Evolving
-  public static void
+  public static TableDesc
   configureOutputStorageHandler(HiveStorageHandler storageHandler,
                   Configuration conf,
                   OutputJobInfo outputJobInfo) {
@@ -528,6 +528,7 @@ public class HCatUtil {
       throw new IllegalStateException(
         "Failed to configure StorageHandler", e);
     }
+    return tableDesc;
   }
 
   /**

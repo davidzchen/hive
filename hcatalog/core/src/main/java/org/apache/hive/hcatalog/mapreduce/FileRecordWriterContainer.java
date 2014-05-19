@@ -25,9 +25,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
@@ -35,11 +39,13 @@ import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapred.Reporter;
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputCommitter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatException;
@@ -58,7 +64,7 @@ class FileRecordWriterContainer extends RecordWriterContainer {
 
   private boolean dynamicPartitioningUsed = false;
 
-  private final Map<String, org.apache.hadoop.mapred.RecordWriter<? super WritableComparable<?>, ? super Writable>> baseDynamicWriters;
+  private final Map<String, RecordWriter> baseDynamicWriters;
   private final Map<String, SerDe> baseDynamicSerDe;
   private final Map<String, org.apache.hadoop.mapred.OutputCommitter> baseDynamicCommitters;
   private final Map<String, org.apache.hadoop.mapred.TaskAttemptContext> dynamicContexts;
@@ -79,8 +85,8 @@ class FileRecordWriterContainer extends RecordWriterContainer {
    * @throws IOException
    * @throws InterruptedException
    */
-  public FileRecordWriterContainer(org.apache.hadoop.mapred.RecordWriter<? super WritableComparable<?>, ? super Writable> baseWriter,
-                   TaskAttemptContext context) throws IOException, InterruptedException {
+  public FileRecordWriterContainer(RecordWriter baseWriter,
+      TaskAttemptContext context) throws IOException, InterruptedException {
     super(context, baseWriter);
     this.context = context;
     jobInfo = HCatOutputFormat.getJobInfo(context.getConfiguration());
@@ -105,7 +111,6 @@ class FileRecordWriterContainer extends RecordWriterContainer {
         "HCatOutputFormat. Please make sure that method is called.");
     }
 
-
     if (!dynamicPartitioningUsed) {
       this.baseDynamicSerDe = null;
       this.baseDynamicWriters = null;
@@ -115,7 +120,7 @@ class FileRecordWriterContainer extends RecordWriterContainer {
       this.dynamicOutputJobInfo = null;
     } else {
       this.baseDynamicSerDe = new HashMap<String, SerDe>();
-      this.baseDynamicWriters = new HashMap<String, org.apache.hadoop.mapred.RecordWriter<? super WritableComparable<?>, ? super Writable>>();
+      this.baseDynamicWriters = new HashMap<String, RecordWriter>();
       this.baseDynamicCommitters = new HashMap<String, org.apache.hadoop.mapred.OutputCommitter>();
       this.dynamicContexts = new HashMap<String, org.apache.hadoop.mapred.TaskAttemptContext>();
       this.dynamicObjectInspectors = new HashMap<String, ObjectInspector>();
@@ -133,11 +138,11 @@ class FileRecordWriterContainer extends RecordWriterContainer {
   @Override
   public void close(TaskAttemptContext context) throws IOException,
     InterruptedException {
-    Reporter reporter = InternalUtil.createReporter(context);
     if (dynamicPartitioningUsed) {
-      for (org.apache.hadoop.mapred.RecordWriter<? super WritableComparable<?>, ? super Writable> bwriter : baseDynamicWriters.values()) {
+      for (RecordWriter bwriter : baseDynamicWriters.values()) {
         //We are in RecordWriter.close() make sense that the context would be TaskInputOutput
-        bwriter.close(reporter);
+        // XXX
+        bwriter.close(false);
       }
       for (Map.Entry<String, org.apache.hadoop.mapred.OutputCommitter> entry : baseDynamicCommitters.entrySet()) {
         org.apache.hadoop.mapred.TaskAttemptContext currContext = dynamicContexts.get(entry.getKey());
@@ -147,7 +152,8 @@ class FileRecordWriterContainer extends RecordWriterContainer {
         }
       }
     } else {
-      getBaseRecordWriter().close(reporter);
+      // XXX
+      getBaseRecordWriter().close(false);
     }
   }
 
@@ -155,7 +161,7 @@ class FileRecordWriterContainer extends RecordWriterContainer {
   public void write(WritableComparable<?> key, HCatRecord value) throws IOException,
     InterruptedException {
 
-    org.apache.hadoop.mapred.RecordWriter localWriter;
+    RecordWriter localWriter;
     ObjectInspector localObjectInspector;
     SerDe localSerDe;
     OutputJobInfo localJobInfo = null;
@@ -180,7 +186,8 @@ class FileRecordWriterContainer extends RecordWriterContainer {
         }
 
         org.apache.hadoop.mapred.TaskAttemptContext currTaskContext = HCatMapRedUtil.createTaskAttemptContext(context);
-        configureDynamicStorageHandler(currTaskContext, dynamicPartValues);
+        TableDesc tableDesc = configureDynamicStorageHandler(
+            currTaskContext, dynamicPartValues);
         localJobInfo = HCatBaseOutputFormat.getJobInfo(currTaskContext.getConfiguration());
 
         //setup serDe
@@ -192,8 +199,9 @@ class FileRecordWriterContainer extends RecordWriterContainer {
         }
 
         //create base OutputFormat
-        org.apache.hadoop.mapred.OutputFormat baseOF =
-          ReflectionUtils.newInstance(storageHandler.getOutputFormatClass(), currTaskContext.getJobConf());
+        HiveOutputFormat baseOF = ReflectionUtils.newInstance(
+            storageHandler.getOutputFormatClass(),
+            currTaskContext.getJobConf());
 
         //We are skipping calling checkOutputSpecs() for each partition
         //As it can throw a FileAlreadyExistsException when more than one mapper is writing to a partition
@@ -221,11 +229,13 @@ class FileRecordWriterContainer extends RecordWriterContainer {
         Path parentDir = new Path(currTaskContext.getConfiguration().get("mapred.work.output.dir"));
         Path childPath = new Path(parentDir,FileOutputFormat.getUniqueFile(currTaskContext, "part", ""));
 
-        org.apache.hadoop.mapred.RecordWriter baseRecordWriter =
-          baseOF.getRecordWriter(
-            parentDir.getFileSystem(currTaskContext.getConfiguration()),
+        System.out.println("path: " + childPath.toString());
+
+        RecordWriter baseRecordWriter = getHiveRecordWriter(
+            baseOF,
             currTaskContext.getJobConf(),
-            childPath.toString(),
+            childPath,
+            tableDesc,
             InternalUtil.createReporter(currTaskContext));
 
         baseDynamicWriters.put(dynKey, baseRecordWriter);
@@ -251,8 +261,7 @@ class FileRecordWriterContainer extends RecordWriterContainer {
       value.remove(colToDel);
     }
 
-
-    //The key given by user is ignored
+    // The key given by user is ignored.
     try {
       localWriter.write(NullWritable.get(), localSerDe.serialize(value.getAll(), localObjectInspector));
     } catch (SerDeException e) {
@@ -260,8 +269,21 @@ class FileRecordWriterContainer extends RecordWriterContainer {
     }
   }
 
-  protected void configureDynamicStorageHandler(JobContext context, List<String> dynamicPartVals) throws IOException {
-    HCatOutputFormat.configureOutputStorageHandler(context, dynamicPartVals);
+  private RecordWriter getHiveRecordWriter(
+      HiveOutputFormat baseOF, JobConf jobConf, Path path,
+      TableDesc tableDesc, Progressable progressable) {
+    Configuration conf = this.context.getConfiguration();
+    boolean isCompressed = conf.getBoolean("mapred.output.compress", false);
+    Class<? extends Writable> valueClass = (Class<? extends Writable>)
+        Class.forName(conf.get("mapred.output.value.class"));
+    return baseOF.getHiveRecordWriter(jobConf, path, valueClass, isCompressed,
+                                      tableDesc, progressable);
+  }
+
+  protected TableDesc configureDynamicStorageHandler(
+      JobContext context, List<String> dynamicPartVals) throws IOException {
+    return HCatOutputFormat.configureOutputStorageHandler(
+        context, dynamicPartVals);
   }
 
 }

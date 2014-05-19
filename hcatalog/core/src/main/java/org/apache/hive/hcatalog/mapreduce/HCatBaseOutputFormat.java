@@ -27,6 +27,7 @@ import java.util.Map;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.metadata.Table;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputFormat;
@@ -123,9 +124,10 @@ public abstract class HCatBaseOutputFormat extends OutputFormat<WritableComparab
    * @throws IOException
    */
   @SuppressWarnings("unchecked")
-  static void configureOutputStorageHandler(
+  static TableDesc configureOutputStorageHandler(
     JobContext jobContext, List<String> dynamicPartVals) throws IOException {
     Configuration conf = jobContext.getConfiguration();
+    TableDesc tableDesc = null;
     try {
       OutputJobInfo jobInfo = (OutputJobInfo) HCatUtil.deserialize(conf.get(HCatConstants.HCAT_KEY_OUTPUT_INFO));
       HiveStorageHandler storageHandler = HCatUtil.getStorageHandler(jobContext.getConfiguration(),jobInfo.getTableInfo().getStorerInfo());
@@ -156,7 +158,8 @@ public abstract class HCatBaseOutputFormat extends OutputFormat<WritableComparab
         jobInfo.setPartitionValues(partitionValues);
       }
 
-      HCatUtil.configureOutputStorageHandler(storageHandler, conf, jobInfo);
+      tableDesc = HCatUtil.configureOutputStorageHandler(
+          storageHandler, conf, jobInfo);
     } catch (Exception e) {
       if (e instanceof HCatException) {
         throw (HCatException) e;
@@ -164,6 +167,7 @@ public abstract class HCatBaseOutputFormat extends OutputFormat<WritableComparab
         throw new HCatException(ErrorType.ERROR_INIT_STORAGE_HANDLER, e);
       }
     }
+    return tableDesc;
   }
 
   /**
