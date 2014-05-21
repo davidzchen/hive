@@ -67,85 +67,54 @@ import org.slf4j.LoggerFactory;
  * Part of the FileOutput*Container classes
  * See {@link FileOutputFormatContainer} for more information
  */
-class FileOutputCommitterContainer extends OutputCommitterContainer {
-
-  private static final String TEMP_DIR_NAME = "_temporary";
-  private static final String LOGS_DIR_NAME = "_logs";
-
-  static final String DYNTEMP_DIR_NAME = "_DYN";
-  static final String SCRATCH_DIR_NAME = "_SCRATCH";
-  private static final String APPEND_SUFFIX = "_a_";
-
-  private static final Logger LOG = LoggerFactory.getLogger(FileOutputCommitterContainer.class);
-  private final boolean dynamicPartitioningUsed;
-  private boolean partitionsDiscovered;
-  private final boolean customDynamicLocationUsed;
-
-  private Map<String, Map<String, String>> partitionsDiscoveredByPath;
-  private Map<String, JobContext> contextDiscoveredByPath;
-  private final HiveStorageHandler cachedStorageHandler;
-
-  HarOutputCommitterPostProcessor harProcessor = new HarOutputCommitterPostProcessor();
-
-  private String ptnRootLocation = null;
-
-  private OutputJobInfo jobInfo = null;
-
+class StaticFileOutputCommitterContainer extends FileOutputCommitterContainer {
   /**
    * @param context current JobContext
    * @param baseCommitter OutputCommitter to contain
    * @throws IOException
    */
-  public FileOutputCommitterContainer(JobContext context,
-                    org.apache.hadoop.mapred.OutputCommitter baseCommitter) throws IOException {
+  public StaticFileOutputCommitterContainer(
+      JobContext context,
+      org.apache.hadoop.mapred.OutputCommitter baseCommitter)
+      throws IOException {
     super(context, baseCommitter);
     jobInfo = HCatOutputFormat.getJobInfo(context.getConfiguration());
-    dynamicPartitioningUsed = jobInfo.isDynamicPartitioningUsed();
-
-    this.partitionsDiscovered = !dynamicPartitioningUsed;
-    cachedStorageHandler = HCatUtil.getStorageHandler(context.getConfiguration(), jobInfo.getTableInfo().getStorerInfo());
-    Table table = new Table(jobInfo.getTableInfo().getTable());
+    this.partitionsDiscovered = true;
+    customDynamicLocationUsed = false;
   }
 
   @Override
   public void abortTask(TaskAttemptContext context) throws IOException {
-    if (!dynamicPartitioningUsed) {
-      getBaseOutputCommitter().abortTask(HCatMapRedUtil.createTaskAttemptContext(context));
-    }
+    getBaseOutputCommitter().abortTask(
+        HCatMapRedUtil.createTaskAttemptContext(context));
   }
 
   @Override
   public void commitTask(TaskAttemptContext context) throws IOException {
-    if (!dynamicPartitioningUsed) {
-         //See HCATALOG-499
-      FileOutputFormatContainer.setWorkOutputPath(context);
-      getBaseOutputCommitter().commitTask(HCatMapRedUtil.createTaskAttemptContext(context));
-    }
+   // See HCATALOG-499
+    FileOutputFormatContainer.setWorkOutputPath(context);
+    getBaseOutputCommitter().commitTask(
+        HCatMapRedUtil.createTaskAttemptContext(context));
   }
 
   @Override
-  public boolean needsTaskCommit(TaskAttemptContext context) throws IOException {
-    if (!dynamicPartitioningUsed) {
-      return getBaseOutputCommitter().needsTaskCommit(HCatMapRedUtil.createTaskAttemptContext(context));
-    } else {
-      // called explicitly through FileRecordWriterContainer.close() if dynamic - return false by default
-      return false;
-    }
+  public boolean needsTaskCommit(TaskAttemptContext context)
+      throws IOException {
+    return getBaseOutputCommitter().needsTaskCommit(
+        HCatMapRedUtil.createTaskAttemptContext(context));
   }
 
   @Override
   public void setupJob(JobContext context) throws IOException {
-    if (getBaseOutputCommitter() != null && !dynamicPartitioningUsed) {
+    if (getBaseOutputCommitter() != null) {
       getBaseOutputCommitter().setupJob(HCatMapRedUtil.createJobContext(context));
     }
-    // in dynamic usecase, called through FileRecordWriterContainer
   }
 
   @Override
   public void setupTask(TaskAttemptContext context) throws IOException {
-    if (!dynamicPartitioningUsed) {
-      getBaseOutputCommitter().setupTask(HCatMapRedUtil.createTaskAttemptContext(context));
-    }
+    getBaseOutputCommitter().setupTask(
+        HCatMapRedUtil.createTaskAttemptContext(context));
   }
 
   @Override
@@ -657,77 +626,75 @@ class FileOutputCommitterContainer extends OutputCommitterContainer {
    * Run to discover dynamic partitions available
    */
   private void discoverPartitions(JobContext context) throws IOException {
-    if (partitionsDiscovered) {
-      return;
-    }
+    if (!partitionsDiscovered) {
+      //      LOG.info("discover ptns called");
+      OutputJobInfo jobInfo = HCatOutputFormat.getJobInfo(context.getConfiguration());
 
-    //      LOG.info("discover ptns called");
-    OutputJobInfo jobInfo = HCatOutputFormat.getJobInfo(context.getConfiguration());
+      harProcessor.setEnabled(jobInfo.getHarRequested());
 
-    harProcessor.setEnabled(jobInfo.getHarRequested());
+      List<Integer> dynamicPartCols = jobInfo.getPosOfDynPartCols();
+      int maxDynamicPartitions = jobInfo.getMaxDynamicPartitions();
 
-    List<Integer> dynamicPartCols = jobInfo.getPosOfDynPartCols();
-    int maxDynamicPartitions = jobInfo.getMaxDynamicPartitions();
+      Path loadPath = new Path(jobInfo.getLocation());
+      FileSystem fs = loadPath.getFileSystem(context.getConfiguration());
 
-    Path loadPath = new Path(jobInfo.getLocation());
-    FileSystem fs = loadPath.getFileSystem(context.getConfiguration());
+      // construct a path pattern (e.g., /*/*) to find all dynamically generated paths
+      String dynPathSpec = loadPath.toUri().getPath();
+      dynPathSpec = dynPathSpec.replaceAll("__HIVE_DEFAULT_PARTITION__", "*");
 
-    // construct a path pattern (e.g., /*/*) to find all dynamically generated paths
-    String dynPathSpec = loadPath.toUri().getPath();
-    dynPathSpec = dynPathSpec.replaceAll("__HIVE_DEFAULT_PARTITION__", "*");
+      //      LOG.info("Searching for "+dynPathSpec);
+      Path pathPattern = new Path(dynPathSpec);
+      FileStatus[] status = fs.globStatus(pathPattern);
 
-    //      LOG.info("Searching for "+dynPathSpec);
-    Path pathPattern = new Path(dynPathSpec);
-    FileStatus[] status = fs.globStatus(pathPattern);
-
-    partitionsDiscoveredByPath = new LinkedHashMap<String, Map<String, String>>();
-    contextDiscoveredByPath = new LinkedHashMap<String, JobContext>();
+      partitionsDiscoveredByPath = new LinkedHashMap<String, Map<String, String>>();
+      contextDiscoveredByPath = new LinkedHashMap<String, JobContext>();
 
 
-    if (status.length == 0) {
-      //        LOG.warn("No partition found genereated by dynamic partitioning in ["
-      //            +loadPath+"] with depth["+jobInfo.getTable().getPartitionKeysSize()
-      //            +"], dynSpec["+dynPathSpec+"]");
-    } else {
-      if ((maxDynamicPartitions != -1) && (status.length > maxDynamicPartitions)) {
-        this.partitionsDiscovered = true;
-        throw new HCatException(ErrorType.ERROR_TOO_MANY_DYNAMIC_PTNS,
-          "Number of dynamic partitions being created "
-            + "exceeds configured max allowable partitions["
-            + maxDynamicPartitions
-            + "], increase parameter ["
-            + HiveConf.ConfVars.DYNAMICPARTITIONMAXPARTS.varname
-            + "] if needed.");
-      }
-
-      for (FileStatus st : status) {
-        LinkedHashMap<String, String> fullPartSpec = new LinkedHashMap<String, String>();
-        if (!customDynamicLocationUsed) {
-          Warehouse.makeSpecFromName(fullPartSpec, st.getPath());
-        } else {
-          HCatFileUtil.getPartKeyValuesForCustomLocation(fullPartSpec, jobInfo,
-              st.getPath().toString());
+      if (status.length == 0) {
+        //        LOG.warn("No partition found genereated by dynamic partitioning in ["
+        //            +loadPath+"] with depth["+jobInfo.getTable().getPartitionKeysSize()
+        //            +"], dynSpec["+dynPathSpec+"]");
+      } else {
+        if ((maxDynamicPartitions != -1) && (status.length > maxDynamicPartitions)) {
+          this.partitionsDiscovered = true;
+          throw new HCatException(ErrorType.ERROR_TOO_MANY_DYNAMIC_PTNS,
+            "Number of dynamic partitions being created "
+              + "exceeds configured max allowable partitions["
+              + maxDynamicPartitions
+              + "], increase parameter ["
+              + HiveConf.ConfVars.DYNAMICPARTITIONMAXPARTS.varname
+              + "] if needed.");
         }
-        partitionsDiscoveredByPath.put(st.getPath().toString(), fullPartSpec);
-        JobConf jobConf = (JobConf)context.getConfiguration();
-        JobContext currContext = HCatMapRedUtil.createJobContext(
-          jobConf,
-          context.getJobID(),
-          InternalUtil.createReporter(HCatMapRedUtil.createTaskAttemptContext(jobConf,
-            ShimLoader.getHadoopShims().getHCatShim().createTaskAttemptID())));
-        HCatOutputFormat.configureOutputStorageHandler(currContext, jobInfo, fullPartSpec);
-        contextDiscoveredByPath.put(st.getPath().toString(), currContext);
+
+        for (FileStatus st : status) {
+          LinkedHashMap<String, String> fullPartSpec = new LinkedHashMap<String, String>();
+          if (!customDynamicLocationUsed) {
+            Warehouse.makeSpecFromName(fullPartSpec, st.getPath());
+          } else {
+            HCatFileUtil.getPartKeyValuesForCustomLocation(fullPartSpec, jobInfo,
+                st.getPath().toString());
+          }
+          partitionsDiscoveredByPath.put(st.getPath().toString(), fullPartSpec);
+          JobConf jobConf = (JobConf)context.getConfiguration();
+          JobContext currContext = HCatMapRedUtil.createJobContext(
+            jobConf,
+            context.getJobID(),
+            InternalUtil.createReporter(HCatMapRedUtil.createTaskAttemptContext(jobConf,
+              ShimLoader.getHadoopShims().getHCatShim().createTaskAttemptID())));
+          HCatOutputFormat.configureOutputStorageHandler(currContext, jobInfo, fullPartSpec);
+          contextDiscoveredByPath.put(st.getPath().toString(), currContext);
+        }
       }
+
+      //      for (Entry<String,Map<String,String>> spec : partitionsDiscoveredByPath.entrySet()){
+      //        LOG.info("Partition "+ spec.getKey());
+      //        for (Entry<String,String> e : spec.getValue().entrySet()){
+      //          LOG.info(e.getKey() + "=>" +e.getValue());
+      //        }
+      //      }
+
+      this.partitionsDiscovered = true;
     }
-
-    //      for (Entry<String,Map<String,String>> spec : partitionsDiscoveredByPath.entrySet()){
-    //        LOG.info("Partition "+ spec.getKey());
-    //        for (Entry<String,String> e : spec.getValue().entrySet()){
-    //          LOG.info(e.getKey() + "=>" +e.getValue());
-    //        }
-    //      }
-
-    this.partitionsDiscovered = true;
   }
 
   private void registerPartitions(JobContext context) throws IOException{
