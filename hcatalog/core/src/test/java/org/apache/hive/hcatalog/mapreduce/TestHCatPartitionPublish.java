@@ -84,11 +84,13 @@ public class TestHCatPartitionPublish {
     workDir.mkdirs();
     return workDir;
   }
+
   @BeforeClass
   public static void setup() throws Exception {
     File workDir = handleWorkDir();
     conf.set("yarn.scheduler.capacity.root.queues", "default");
     conf.set("yarn.scheduler.capacity.root.default.capacity", "100");
+    conf.set("fs.pfile.impl", "org.apache.hadoop.fs.ProxyLocalFileSystem");
 
     fs = FileSystem.get(conf);
     System.setProperty("hadoop.log.dir", new File(workDir, "/logs").getAbsolutePath());
