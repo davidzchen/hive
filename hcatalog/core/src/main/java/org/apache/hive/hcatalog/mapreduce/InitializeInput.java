@@ -102,8 +102,8 @@ class InitializeInput {
         hiveConf = new HiveConf(HCatInputFormat.class);
       }
       client = HCatUtil.getHiveClient(hiveConf);
-      Table table = HCatUtil.getTable(client, inputJobInfo.getDatabaseName(),
-        inputJobInfo.getTableName());
+      Table table = new Table(client.getTable(inputJobInfo.getDatabaseName(),
+        inputJobInfo.getTableName()));
 
       List<PartInfo> partInfoList = new ArrayList<PartInfo>();
 

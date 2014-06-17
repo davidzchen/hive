@@ -19,15 +19,22 @@
 
 package org.apache.hive.hcatalog.mapreduce;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
-
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputCommitter;
 import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
 import org.apache.hive.hcatalog.common.HCatUtil;
+import org.apache.hive.hcatalog.common.HCatConstants;
 import org.apache.hive.hcatalog.data.HCatRecord;
 
 import java.io.IOException;
@@ -47,7 +54,7 @@ class DefaultOutputFormatContainer extends OutputFormatContainer {
     NUMBER_FORMAT.setGroupingUsed(false);
   }
 
-  public DefaultOutputFormatContainer(org.apache.hadoop.mapred.OutputFormat<WritableComparable<?>, Writable> of) {
+  public DefaultOutputFormatContainer(HiveOutputFormat of) {
     super(of);
   }
 
@@ -63,11 +70,33 @@ class DefaultOutputFormatContainer extends OutputFormatContainer {
    * @throws IOException
    */
   @Override
-  public RecordWriter<WritableComparable<?>, HCatRecord>
-  getRecordWriter(TaskAttemptContext context) throws IOException, InterruptedException {
-    String name = getOutputName(context.getTaskAttemptID().getTaskID().getId());
-    return new DefaultRecordWriterContainer(context,
-      getBaseOutputFormat().getRecordWriter(null, new JobConf(context.getConfiguration()), name, InternalUtil.createReporter(context)));
+  public RecordWriter<WritableComparable<?>, HCatRecord> getRecordWriter(
+      TaskAttemptContext context) throws IOException, InterruptedException {
+    Configuration conf = context.getConfiguration();
+    String jobInfoString = context.getConfiguration().get(HCatConstants.HCAT_KEY_OUTPUT_INFO);
+    OutputJobInfo jobInfo = (OutputJobInfo) HCatUtil.deserialize(jobInfoString);
+    Path parentDir = new Path(conf.get("mapred.work.output.dir"));
+    Path childPath = new Path(parentDir,
+        FileOutputFormat.getUniqueFile(context, "part", ""));
+
+    boolean isCompressed = conf.getBoolean("mapred.output.compress", false);
+    Class<? extends Writable> valueClass = null;
+    try {
+      valueClass = (Class<? extends Writable>)
+          Class.forName(conf.get("mapred.output.value.class"));
+    } catch (ClassNotFoundException e) {
+      throw new RuntimeException(e);
+    }
+    FileSinkOperator.RecordWriter recordWriter =
+        getBaseOutputFormat().getHiveRecordWriter(
+            new JobConf(conf),
+            childPath,
+            valueClass,
+            isCompressed,
+            jobInfo.getTableInfo().getStorerInfo().getProperties(),
+            InternalUtil.createReporter(context));
+
+    return new DefaultRecordWriterContainer(context, recordWriter);
   }
 
 
@@ -82,7 +111,8 @@ class DefaultOutputFormatContainer extends OutputFormatContainer {
   @Override
   public OutputCommitter getOutputCommitter(TaskAttemptContext context)
     throws IOException, InterruptedException {
-    return new DefaultOutputCommitterContainer(context, new JobConf(context.getConfiguration()).getOutputCommitter());
+    return new DefaultOutputCommitterContainer(context,
+        new JobConf(context.getConfiguration()).getOutputCommitter());
   }
 
   /**

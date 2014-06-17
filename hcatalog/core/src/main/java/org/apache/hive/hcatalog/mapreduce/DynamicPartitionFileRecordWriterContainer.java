@@ -25,23 +25,32 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
+import org.apache.hadoop.hive.ql.io.HiveFileFormatUtils;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.Reporter;
+import org.apache.hadoop.mapred.OutputFormat;
 import org.apache.hadoop.mapred.RecordWriter;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputCommitter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
+
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatException;
 import org.apache.hive.hcatalog.common.HCatUtil;
@@ -55,7 +64,7 @@ class DynamicPartitionFileRecordWriterContainer extends FileRecordWriterContaine
   private final List<Integer> dynamicPartCols;
   private int maxDynamicPartitions;
 
-  private final Map<String, RecordWriter<? super WritableComparable<?>, ? super Writable>> baseDynamicWriters;
+  private final Map<String, FileSinkOperator.RecordWriter> baseDynamicWriters;
   private final Map<String, SerDe> baseDynamicSerDe;
   private final Map<String, org.apache.hadoop.mapred.OutputCommitter> baseDynamicCommitters;
   private final Map<String, org.apache.hadoop.mapred.TaskAttemptContext> dynamicContexts;
@@ -69,8 +78,8 @@ class DynamicPartitionFileRecordWriterContainer extends FileRecordWriterContaine
    * @throws InterruptedException
    */
   public DynamicPartitionFileRecordWriterContainer(
-      RecordWriter<? super WritableComparable<?>, ? super Writable> baseWriter,
-      TaskAttemptContext context) throws IOException, InterruptedException {
+      FileSinkOperator.RecordWriter baseWriter, TaskAttemptContext context)
+      throws IOException, InterruptedException {
     super(baseWriter, context);
     maxDynamicPartitions = jobInfo.getMaxDynamicPartitions();
     dynamicPartCols = jobInfo.getPosOfDynPartCols();
@@ -80,8 +89,7 @@ class DynamicPartitionFileRecordWriterContainer extends FileRecordWriterContaine
     }
 
     this.baseDynamicSerDe = new HashMap<String, SerDe>();
-    this.baseDynamicWriters =
-        new HashMap<String, RecordWriter<? super WritableComparable<?>, ? super Writable>>();
+    this.baseDynamicWriters = new HashMap<String, FileSinkOperator.RecordWriter>();
     this.baseDynamicCommitters = new HashMap<String, org.apache.hadoop.mapred.OutputCommitter>();
     this.dynamicContexts = new HashMap<String, org.apache.hadoop.mapred.TaskAttemptContext>();
     this.dynamicObjectInspectors = new HashMap<String, ObjectInspector>();
@@ -90,15 +98,12 @@ class DynamicPartitionFileRecordWriterContainer extends FileRecordWriterContaine
 
   @Override
   public void close(TaskAttemptContext context) throws IOException, InterruptedException {
-    Reporter reporter = InternalUtil.createReporter(context);
-    for (RecordWriter<? super WritableComparable<?>, ? super Writable> bwriter : baseDynamicWriters
-        .values()) {
+    for (FileSinkOperator.RecordWriter bwriter : baseDynamicWriters.values()) {
       // We are in RecordWriter.close() make sense that the context would be
       // TaskInputOutput.
-      bwriter.close(reporter);
+      bwriter.close(false);
     }
-    for (Map.Entry<String, org.apache.hadoop.mapred.OutputCommitter> entry : baseDynamicCommitters
-        .entrySet()) {
+    for (Map.Entry<String, org.apache.hadoop.mapred.OutputCommitter> entry : baseDynamicCommitters.entrySet()) {
       org.apache.hadoop.mapred.TaskAttemptContext currContext = dynamicContexts.get(entry.getKey());
       OutputCommitter baseOutputCommitter = entry.getValue();
       if (baseOutputCommitter.needsTaskCommit(currContext)) {
@@ -118,90 +123,113 @@ class DynamicPartitionFileRecordWriterContainer extends FileRecordWriterContaine
     }
 
     String dynKey = dynamicPartValues.toString();
-    if (!baseDynamicWriters.containsKey(dynKey)) {
-      if ((maxDynamicPartitions != -1) && (baseDynamicWriters.size() > maxDynamicPartitions)) {
-        throw new HCatException(ErrorType.ERROR_TOO_MANY_DYNAMIC_PTNS,
-            "Number of dynamic partitions being created "
-                + "exceeds configured max allowable partitions[" + maxDynamicPartitions
-                + "], increase parameter [" + HiveConf.ConfVars.DYNAMICPARTITIONMAXPARTS.varname
-                + "] if needed.");
-      }
-
-      org.apache.hadoop.mapred.TaskAttemptContext currTaskContext =
-          HCatMapRedUtil.createTaskAttemptContext(context);
-      configureDynamicStorageHandler(currTaskContext, dynamicPartValues);
-      localJobInfo = HCatBaseOutputFormat.getJobInfo(currTaskContext.getConfiguration());
-
-      // Setup serDe.
-      SerDe currSerDe =
-          ReflectionUtils.newInstance(storageHandler.getSerDeClass(), currTaskContext.getJobConf());
-      try {
-        InternalUtil.initializeOutputSerDe(currSerDe, currTaskContext.getConfiguration(),
-            localJobInfo);
-      } catch (SerDeException e) {
-        throw new IOException("Failed to initialize SerDe", e);
-      }
-
-      // create base OutputFormat
-      org.apache.hadoop.mapred.OutputFormat baseOF =
-          ReflectionUtils.newInstance(storageHandler.getOutputFormatClass(),
-              currTaskContext.getJobConf());
-
-      // We are skipping calling checkOutputSpecs() for each partition
-      // As it can throw a FileAlreadyExistsException when more than one
-      // mapper is writing to a partition.
-      // See HCATALOG-490, also to avoid contacting the namenode for each new
-      // FileOutputFormat instance.
-      // In general this should be ok for most FileOutputFormat implementations
-      // but may become an issue for cases when the method is used to perform
-      // other setup tasks.
-
-      // Get Output Committer
-      org.apache.hadoop.mapred.OutputCommitter baseOutputCommitter =
-          currTaskContext.getJobConf().getOutputCommitter();
-
-      // Create currJobContext the latest so it gets all the config changes
-      org.apache.hadoop.mapred.JobContext currJobContext =
-          HCatMapRedUtil.createJobContext(currTaskContext);
-
-      // Set up job.
-      baseOutputCommitter.setupJob(currJobContext);
-
-      // Recreate to refresh jobConf of currTask context.
-      currTaskContext =
-          HCatMapRedUtil.createTaskAttemptContext(currJobContext.getJobConf(),
-              currTaskContext.getTaskAttemptID(), currTaskContext.getProgressible());
-
-      // Set temp location.
-      currTaskContext.getConfiguration().set(
-          "mapred.work.output.dir",
-          new FileOutputCommitter(new Path(localJobInfo.getLocation()), currTaskContext)
-              .getWorkPath().toString());
-
-      // Set up task.
-      baseOutputCommitter.setupTask(currTaskContext);
-
-      Path parentDir = new Path(currTaskContext.getConfiguration().get("mapred.work.output.dir"));
-      Path childPath =
-          new Path(parentDir, FileOutputFormat.getUniqueFile(currTaskContext, "part", ""));
-
-      RecordWriter baseRecordWriter =
-          baseOF.getRecordWriter(parentDir.getFileSystem(currTaskContext.getConfiguration()),
-              currTaskContext.getJobConf(), childPath.toString(),
-              InternalUtil.createReporter(currTaskContext));
-
-      baseDynamicWriters.put(dynKey, baseRecordWriter);
-      baseDynamicSerDe.put(dynKey, currSerDe);
-      baseDynamicCommitters.put(dynKey, baseOutputCommitter);
-      dynamicContexts.put(dynKey, currTaskContext);
-      dynamicObjectInspectors.put(dynKey,
-          InternalUtil.createStructObjectInspector(jobInfo.getOutputSchema()));
-      dynamicOutputJobInfo.put(dynKey,
-          HCatOutputFormat.getJobInfo(dynamicContexts.get(dynKey).getConfiguration()));
+    if (baseDynamicWriters.containsKey(dynKey)) {
+      return new LocalFileWriter(baseDynamicWriters.get(dynKey), dynamicObjectInspectors.get(dynKey),
+          baseDynamicSerDe.get(dynKey), dynamicOutputJobInfo.get(dynKey));
     }
+
+    if ((maxDynamicPartitions != -1) && (baseDynamicWriters.size() > maxDynamicPartitions)) {
+      throw new HCatException(ErrorType.ERROR_TOO_MANY_DYNAMIC_PTNS,
+          "Number of dynamic partitions being created "
+              + "exceeds configured max allowable partitions[" + maxDynamicPartitions
+              + "], increase parameter [" + HiveConf.ConfVars.DYNAMICPARTITIONMAXPARTS.varname
+              + "] if needed.");
+    }
+
+    org.apache.hadoop.mapred.TaskAttemptContext currTaskContext =
+        HCatMapRedUtil.createTaskAttemptContext(context);
+    configureDynamicStorageHandler(currTaskContext, dynamicPartValues);
+    localJobInfo = HCatBaseOutputFormat.getJobInfo(currTaskContext.getConfiguration());
+
+    // Setup serDe.
+    SerDe currSerDe =
+        ReflectionUtils.newInstance(storageHandler.getSerDeClass(), currTaskContext.getJobConf());
+    try {
+      InternalUtil.initializeOutputSerDe(currSerDe, currTaskContext.getConfiguration(),
+          localJobInfo);
+    } catch (SerDeException e) {
+      throw new IOException("Failed to initialize SerDe", e);
+    }
+
+    // create base OutputFormat
+    Class<? extends HiveOutputFormat> outputFormatClass =
+        HiveFileFormatUtils.getOutputFormatSubstitute(storageHandler.getOutputFormatClass(),
+            false);
+    HiveOutputFormat baseOF = ReflectionUtils.newInstance(outputFormatClass,
+        currTaskContext.getJobConf());
+
+    // We are skipping calling checkOutputSpecs() for each partition
+    // As it can throw a FileAlreadyExistsException when more than one
+    // mapper is writing to a partition.
+    // See HCATALOG-490, also to avoid contacting the namenode for each new
+    // FileOutputFormat instance.
+    // In general this should be ok for most FileOutputFormat implementations
+    // but may become an issue for cases when the method is used to perform
+    // other setup tasks.
+
+    // Get Output Committer
+    org.apache.hadoop.mapred.OutputCommitter baseOutputCommitter =
+        currTaskContext.getJobConf().getOutputCommitter();
+
+    // Create currJobContext the latest so it gets all the config changes
+    org.apache.hadoop.mapred.JobContext currJobContext =
+        HCatMapRedUtil.createJobContext(currTaskContext);
+
+    // Set up job.
+    baseOutputCommitter.setupJob(currJobContext);
+
+    // Recreate to refresh jobConf of currTask context.
+    currTaskContext =
+        HCatMapRedUtil.createTaskAttemptContext(currJobContext.getJobConf(),
+            currTaskContext.getTaskAttemptID(), currTaskContext.getProgressible());
+
+    // Set temp location.
+    currTaskContext.getConfiguration().set(
+        "mapred.work.output.dir",
+        new FileOutputCommitter(new Path(localJobInfo.getLocation()), currTaskContext)
+            .getWorkPath().toString());
+
+    // Set up task.
+    baseOutputCommitter.setupTask(currTaskContext);
+
+    Path parentDir = new Path(currTaskContext.getConfiguration().get("mapred.work.output.dir"));
+    Path childPath = new Path(parentDir,
+        FileOutputFormat.getUniqueFile(currTaskContext, "part", ""));
+
+    FileSinkOperator.RecordWriter baseRecordWriter = getHiveRecordWriter(
+        baseOF, currTaskContext.getJobConf(), childPath, localJobInfo,
+        InternalUtil.createReporter(currTaskContext));
+
+    baseDynamicWriters.put(dynKey, baseRecordWriter);
+    baseDynamicSerDe.put(dynKey, currSerDe);
+    baseDynamicCommitters.put(dynKey, baseOutputCommitter);
+    dynamicContexts.put(dynKey, currTaskContext);
+    dynamicObjectInspectors.put(dynKey,
+        InternalUtil.createStructObjectInspector(jobInfo.getOutputSchema()));
+    dynamicOutputJobInfo.put(dynKey,
+        HCatOutputFormat.getJobInfo(dynamicContexts.get(dynKey).getConfiguration()));
 
     return new LocalFileWriter(baseDynamicWriters.get(dynKey), dynamicObjectInspectors.get(dynKey),
         baseDynamicSerDe.get(dynKey), dynamicOutputJobInfo.get(dynKey));
+  }
+
+  protected FileSinkOperator.RecordWriter getHiveRecordWriter(
+      HiveOutputFormat baseOutputFormat, JobConf jobConf, Path path, OutputJobInfo jobInfo,
+      Progressable progressable) throws IOException {
+    Configuration conf = this.context.getConfiguration();
+    boolean isCompressed = conf.getBoolean("mapred.output.compress", false);
+    Class<? extends Writable> valueClass = null;
+    try {
+      valueClass = (Class<? extends Writable>)
+          Class.forName(conf.get("mapred.output.value.class"));
+    } catch (ClassNotFoundException e) {
+      throw new RuntimeException(e);
+    }
+
+    return baseOutputFormat.getHiveRecordWriter(
+        jobConf, path, valueClass, isCompressed,
+        jobInfo.getTableInfo().getStorerInfo().getProperties(),
+        progressable);
   }
 
   protected void configureDynamicStorageHandler(JobContext context, List<String> dynamicPartVals)
