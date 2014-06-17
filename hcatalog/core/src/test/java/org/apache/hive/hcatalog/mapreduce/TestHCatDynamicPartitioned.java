@@ -53,9 +53,10 @@ public class TestHCatDynamicPartitioned extends HCatMapReduceTest {
   protected static final int NUM_RECORDS = 20;
   protected static final int NUM_PARTITIONS = 5;
 
-  @BeforeClass
-  public static void generateInputData() throws Exception {
-    tableName = "testHCatDynamicPartitionedTable";
+  public TestHCatDynamicPartitioned(String formatName, String serdeClass, String inputFormatClass,
+      String outputFormatClass, String storageCustomHandlerClass) throws Exception {
+    super(formatName, serdeClass, inputFormatClass, outputFormatClass, storageCustomHandlerClass);
+    tableName = "testHCatDynamicPartitionedTable_" + formatName;
     generateWriteRecords(NUM_RECORDS, NUM_PARTITIONS, 0);
     generateDataColumns();
   }

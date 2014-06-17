@@ -1,0 +1,48 @@
+{
+  "type" : "record",
+  "name" : "schema",
+  "fields" : [ {
+    "name" : "myboolean",
+    "type" : "boolean"
+  }, {
+    "name" : "myint",
+    "type" : "int"
+  }, {
+    "name" : "mylong",
+    "type" : "long"
+  }, {
+    "name" : "myfloat",
+    "type" : "float"
+  }, {
+    "name" : "mydouble",
+    "type" : "double"
+  }, {
+    "name" : "mybytes",
+    "type" : "bytes"
+  }, {
+    "name" : "mystring",
+    "type" : "string"
+  }, {
+    "name" : "myrecord",
+    "type" : {
+      "type" : "record",
+      "name" : "myrecord",
+      "fields" : [ {
+        "name" : "mynestedint",
+        "type" : "int"
+      } ]
+    }
+  }, {
+    "name" : "myarray",
+    "type" : {
+      "type" : "array",
+      "items" : "int"
+    }
+  }, {
+    "name" : "mymap",
+    "type" : {
+      "type" : "map",
+      "values" : "int"
+    }
+  } ]
+}

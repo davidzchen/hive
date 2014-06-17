@@ -17,18 +17,20 @@
  * under the License.
  */
 
-package org.apache.hive.hcatalog.mapreduce;
+package org.apache.hive.hcatalog.mapreduce.storage;
 
-public class TestHCatMutableNonPartitioned extends TestHCatNonPartitioned {
-  public TestHCatMutableNonPartitioned(String formatName, String serdeClass,
-      String inputFormatClass, String outputFormatClass, String storageCustomHandlerClass)
-      throws Exception {
-    super(formatName, serdeClass, inputFormatClass, outputFormatClass, storageCustomHandlerClass);
+import org.apache.hadoop.hive.metastore.api.Table;
+
+/**
+ * Class used to handle custom logic, such as setting custom table properties,
+ * when running HCatalog core tests against a storage format.
+ */
+public class StorageCustomHandler {
+  /**
+   * Sets custom table properties. By default, this method is an no-op.
+   *
+   * @param table The table object.
+   */
+  public void setCustomTableProperties(Table table) {
   }
-
-  @Override
-  protected boolean isTableImmutable() {
-    return false;
-  }
-
 }
