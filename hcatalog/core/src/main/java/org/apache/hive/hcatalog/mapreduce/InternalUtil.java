@@ -24,7 +24,10 @@ import org.apache.hadoop.hive.metastore.MetaStoreUtils;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
+import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.metadata.Table;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.serde.serdeConstants;
 import org.apache.hadoop.hive.serde2.Deserializer;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
@@ -44,9 +47,11 @@ import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
 import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+
 import org.apache.hive.hcatalog.common.HCatUtil;
 import org.apache.hive.hcatalog.data.schema.HCatFieldSchema;
 import org.apache.hive.hcatalog.data.schema.HCatSchema;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,7 +76,6 @@ class InternalUtil {
       sd.getSerdeInfo().getParameters().entrySet()) {
       hcatProperties.put(param.getKey(), param.getValue());
     }
-
 
     return new StorerInfo(
       sd.getInputFormat(), sd.getOutputFormat(), sd.getSerdeInfo().getSerializationLib(),
@@ -139,40 +143,37 @@ class InternalUtil {
     }
   }
 
-  //TODO this has to find a better home, it's also hardcoded as default in hive would be nice
+  // TODO this has to find a better home, it's also hardcoded as default in hive would be nice
   // if the default was decided by the serde
-  static void initializeOutputSerDe(SerDe serDe, Configuration conf, OutputJobInfo jobInfo)
-    throws SerDeException {
-    SerDeUtils.initializeSerDe(serDe, conf,
-                               getSerdeProperties(jobInfo.getTableInfo(),
-                                                  jobInfo.getOutputSchema()),
-                               null);
+  public static void initializeOutputSerDe(SerDe serDe, Properties tableProperties,
+      Configuration conf, OutputJobInfo jobInfo) throws SerDeException {
+    TableDesc tableDesc = Utilities.getTableDesc(new Table(jobInfo.getTableInfo().getTable()));
+    tableProperties.putAll(tableDesc.getProperties());
+
+    // column types must be separated by ',' and not ':'
+    List<FieldSchema> fields = HCatUtil.getFieldSchemaList(jobInfo.getOutputSchema().getFields());
+    tableProperties.setProperty(org.apache.hadoop.hive.serde.serdeConstants.LIST_COLUMNS,
+        MetaStoreUtils.getColumnNamesFromFieldSchema(fields));
+    tableProperties.setProperty(org.apache.hadoop.hive.serde.serdeConstants.LIST_COLUMN_TYPES,
+        MetaStoreUtils.getColumnTypesFromFieldSchema(fields));
+
+    SerDeUtils.initializeSerDe(serDe, conf, tableProperties, null);
   }
 
-  static void initializeDeserializer(Deserializer deserializer, Configuration conf,
-                     HCatTableInfo info, HCatSchema schema) throws SerDeException {
-    Properties props = getSerdeProperties(info, schema);
+  public static void initializeDeserializer(Deserializer deserializer, Configuration conf,
+      HCatTableInfo info, HCatSchema schema) throws SerDeException {
+    TableDesc tableDesc = Utilities.getTableDesc(new Table(info.getTable()));
+    Properties props = tableDesc.getProperties();
+
+    // column types must be separated by ',' and not ':'
+    List<FieldSchema> fields = HCatUtil.getFieldSchemaList(schema.getFields());
+    props.setProperty(org.apache.hadoop.hive.serde.serdeConstants.LIST_COLUMNS,
+        MetaStoreUtils.getColumnNamesFromFieldSchema(fields));
+    props.setProperty(org.apache.hadoop.hive.serde.serdeConstants.LIST_COLUMN_TYPES,
+        MetaStoreUtils.getColumnTypesFromFieldSchema(fields));
+
     LOG.info("Initializing " + deserializer.getClass().getName() + " with properties " + props);
     SerDeUtils.initializeSerDe(deserializer, conf, props, null);
-  }
-
-  private static Properties getSerdeProperties(HCatTableInfo info, HCatSchema s)
-    throws SerDeException {
-    Properties props = new Properties();
-    List<FieldSchema> fields = HCatUtil.getFieldSchemaList(s.getFields());
-    props.setProperty(org.apache.hadoop.hive.serde.serdeConstants.LIST_COLUMNS,
-      MetaStoreUtils.getColumnNamesFromFieldSchema(fields));
-    props.setProperty(org.apache.hadoop.hive.serde.serdeConstants.LIST_COLUMN_TYPES,
-      MetaStoreUtils.getColumnTypesFromFieldSchema(fields));
-
-    // setting these props to match LazySimpleSerde
-    props.setProperty(org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_NULL_FORMAT, "\\N");
-    props.setProperty(org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_FORMAT, "1");
-
-    //add props from params set in table schema
-    props.putAll(info.getStorerInfo().getProperties());
-
-    return props;
   }
 
   static Reporter createReporter(TaskAttemptContext context) {

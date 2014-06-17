@@ -96,7 +96,7 @@ public class AvroSerDe extends AbstractSerDe {
       columnTypes = TypeInfoUtils.getTypeInfosFromTypeString(columnTypeProperty);
 
       List<String> columnComments;
-      if (columnCommentProperty.isEmpty()) {
+      if (columnCommentProperty == null || columnCommentProperty.isEmpty()) {
         columnComments = new ArrayList<String>();
       } else {
         columnComments = Arrays.asList(columnCommentProperty.split(","));

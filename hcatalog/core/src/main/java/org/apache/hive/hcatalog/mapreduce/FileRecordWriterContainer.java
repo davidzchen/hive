@@ -24,9 +24,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
@@ -35,13 +37,13 @@ import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapred.Reporter;
-import org.apache.hadoop.mapred.RecordWriter;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputCommitter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.util.ReflectionUtils;
+
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatException;
 import org.apache.hive.hcatalog.common.HCatUtil;
@@ -56,6 +58,7 @@ abstract class FileRecordWriterContainer extends RecordWriterContainer {
   protected final HiveStorageHandler storageHandler;
   protected final SerDe serDe;
   protected final ObjectInspector objectInspector;
+  protected final Properties tableProperties;
 
   private final List<Integer> partColsToDel;
 
@@ -68,20 +71,20 @@ abstract class FileRecordWriterContainer extends RecordWriterContainer {
    * @throws IOException
    * @throws InterruptedException
    */
-  public FileRecordWriterContainer(
-      RecordWriter<? super WritableComparable<?>, ? super Writable> baseWriter,
-      TaskAttemptContext context) throws IOException, InterruptedException {
-    super(context, baseWriter);
+  public FileRecordWriterContainer(TaskAttemptContext context)
+      throws IOException, InterruptedException {
+    super(context);
     this.context = context;
-    jobInfo = HCatOutputFormat.getJobInfo(context.getConfiguration());
 
-    storageHandler =
-        HCatUtil.getStorageHandler(context.getConfiguration(), jobInfo.getTableInfo()
-            .getStorerInfo());
+    jobInfo = HCatOutputFormat.getJobInfo(context.getConfiguration());
+    storageHandler = HCatUtil.getStorageHandler(context.getConfiguration(),
+        jobInfo.getTableInfo().getStorerInfo());
     serDe = ReflectionUtils.newInstance(storageHandler.getSerDeClass(), context.getConfiguration());
     objectInspector = InternalUtil.createStructObjectInspector(jobInfo.getOutputSchema());
+    tableProperties = new Properties();
     try {
-      InternalUtil.initializeOutputSerDe(serDe, context.getConfiguration(), jobInfo);
+      InternalUtil.initializeOutputSerDe(serDe, tableProperties, context.getConfiguration(),
+          jobInfo);
     } catch (SerDeException e) {
       throw new IOException("Failed to inialize SerDe", e);
     }
@@ -108,7 +111,7 @@ abstract class FileRecordWriterContainer extends RecordWriterContainer {
   public void write(WritableComparable<?> key, HCatRecord value) throws IOException,
       InterruptedException {
     LocalFileWriter localFileWriter = getLocalFileWriter(value);
-    RecordWriter localWriter = localFileWriter.getLocalWriter();
+    FileSinkOperator.RecordWriter localWriter = localFileWriter.getLocalWriter();
     ObjectInspector localObjectInspector = localFileWriter.getLocalObjectInspector();
     SerDe localSerDe = localFileWriter.getLocalSerDe();
     OutputJobInfo localJobInfo = localFileWriter.getLocalJobInfo();
@@ -119,28 +122,27 @@ abstract class FileRecordWriterContainer extends RecordWriterContainer {
 
     // The key given by user is ignored
     try {
-      localWriter.write(NullWritable.get(),
-          localSerDe.serialize(value.getAll(), localObjectInspector));
+      localWriter.write(localSerDe.serialize(value.getAll(), localObjectInspector));
     } catch (SerDeException e) {
       throw new IOException("Failed to serialize object", e);
     }
   }
 
   class LocalFileWriter {
-    private RecordWriter localWriter;
+    private FileSinkOperator.RecordWriter localWriter;
     private ObjectInspector localObjectInspector;
     private SerDe localSerDe;
     private OutputJobInfo localJobInfo;
 
-    public LocalFileWriter(RecordWriter localWriter, ObjectInspector localObjectInspector,
-        SerDe localSerDe, OutputJobInfo localJobInfo) {
+    public LocalFileWriter(FileSinkOperator.RecordWriter localWriter,
+        ObjectInspector localObjectInspector, SerDe localSerDe, OutputJobInfo localJobInfo) {
       this.localWriter = localWriter;
       this.localObjectInspector = localObjectInspector;
       this.localSerDe = localSerDe;
       this.localJobInfo = localJobInfo;
     }
 
-    public RecordWriter getLocalWriter() {
+    public FileSinkOperator.RecordWriter getLocalWriter() {
       return localWriter;
     }
 

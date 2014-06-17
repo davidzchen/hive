@@ -20,7 +20,13 @@
 package org.apache.hive.hcatalog.mapreduce;
 
 import java.io.IOException;
+import java.util.Properties;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
@@ -28,7 +34,9 @@ import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.util.ReflectionUtils;
+
 import org.apache.hive.hcatalog.common.HCatUtil;
 import org.apache.hive.hcatalog.data.HCatRecord;
 
@@ -45,36 +53,57 @@ class DefaultRecordWriterContainer extends RecordWriterContainer {
 
   /**
    * @param context current JobContext
-   * @param baseRecordWriter RecordWriter to contain
    * @throws IOException
    * @throws InterruptedException
    */
   public DefaultRecordWriterContainer(TaskAttemptContext context,
-                    org.apache.hadoop.mapred.RecordWriter<? super WritableComparable<?>, ? super Writable> baseRecordWriter) throws IOException, InterruptedException {
-    super(context, baseRecordWriter);
-    jobInfo = HCatOutputFormat.getJobInfo(context.getConfiguration());
-    storageHandler = HCatUtil.getStorageHandler(context.getConfiguration(), jobInfo.getTableInfo().getStorerInfo());
+      HiveOutputFormat baseOutputFormat) throws IOException {
+    super(context);
+    Configuration conf = context.getConfiguration();
+    Properties tableProperties = new Properties();
+
+    jobInfo = HCatOutputFormat.getJobInfo(conf);
+    storageHandler = HCatUtil.getStorageHandler(conf, jobInfo.getTableInfo().getStorerInfo());
     HCatOutputFormat.configureOutputStorageHandler(context);
-    serDe = ReflectionUtils.newInstance(storageHandler.getSerDeClass(), context.getConfiguration());
+    serDe = ReflectionUtils.newInstance(storageHandler.getSerDeClass(), conf);
     hcatRecordOI = InternalUtil.createStructObjectInspector(jobInfo.getOutputSchema());
     try {
-      InternalUtil.initializeOutputSerDe(serDe, context.getConfiguration(), jobInfo);
+      InternalUtil.initializeOutputSerDe(serDe, tableProperties, context.getConfiguration(),
+          jobInfo);
     } catch (SerDeException e) {
       throw new IOException("Failed to initialize SerDe", e);
     }
+
+    // Initialize RecordWriter.
+    Path parentDir = new Path(conf.get("mapred.work.output.dir"));
+    Path childPath = new Path(parentDir,
+        FileOutputFormat.getUniqueFile(context, "part", ""));
+
+    boolean isCompressed = conf.getBoolean("mapred.output.compress", false);
+    Class<? extends Writable> valueClass = null;
+    try {
+      valueClass = (Class<? extends Writable>)
+          Class.forName(conf.get("mapred.output.value.class"));
+    } catch (ClassNotFoundException e) {
+      throw new RuntimeException(e);
+    }
+
+    FileSinkOperator.RecordWriter recordWriter = baseOutputFormat.getHiveRecordWriter(
+        new JobConf(conf), childPath, valueClass, isCompressed, tableProperties,
+        InternalUtil.createReporter(context));
+    setBaseRecordWriter(recordWriter);
   }
 
   @Override
-  public void close(TaskAttemptContext context) throws IOException,
-    InterruptedException {
-    getBaseRecordWriter().close(InternalUtil.createReporter(context));
+  public void close(TaskAttemptContext context) throws IOException, InterruptedException {
+    getBaseRecordWriter().close(false);
   }
 
   @Override
   public void write(WritableComparable<?> key, HCatRecord value) throws IOException,
     InterruptedException {
     try {
-      getBaseRecordWriter().write(null, serDe.serialize(value.getAll(), hcatRecordOI));
+      getBaseRecordWriter().write(serDe.serialize(value.getAll(), hcatRecordOI));
     } catch (SerDeException e) {
       throw new IOException("Failed to serialize object", e);
     }

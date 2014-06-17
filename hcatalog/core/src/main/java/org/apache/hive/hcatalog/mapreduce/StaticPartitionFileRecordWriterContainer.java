@@ -20,12 +20,18 @@
 package org.apache.hive.hcatalog.mapreduce;
 
 import java.io.IOException;
+import java.util.Properties;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
-import org.apache.hadoop.mapred.RecordWriter;
+import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.mapred.FileOutputFormat;
 import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hive.hcatalog.mapreduce.FileRecordWriterContainer;
 import org.apache.hive.hcatalog.common.HCatException;
 import org.apache.hive.hcatalog.data.HCatRecord;
@@ -41,16 +47,35 @@ class StaticPartitionFileRecordWriterContainer extends FileRecordWriterContainer
    * @throws IOException
    * @throws InterruptedException
    */
-  public StaticPartitionFileRecordWriterContainer(
-      RecordWriter<? super WritableComparable<?>, ? super Writable> baseWriter,
-      TaskAttemptContext context) throws IOException, InterruptedException {
-    super(baseWriter, context);
+  public StaticPartitionFileRecordWriterContainer(TaskAttemptContext context,
+      HiveOutputFormat baseOutputFormat)
+      throws IOException, InterruptedException {
+    super(context);
+    Configuration conf = context.getConfiguration();
+    JobConf jobConf = new JobConf(conf);
+    Path parentDir = new Path(conf.get("mapred.work.output.dir"));
+    Path childPath = new Path(parentDir,
+        FileOutputFormat.getUniqueName(jobConf, "part"));
+
+    boolean isCompressed = conf.getBoolean("mapred.output.compress", false);
+    Class<? extends Writable> valueClass = null;
+    try {
+      valueClass = (Class<? extends Writable>)
+          Class.forName(conf.get("mapred.output.value.class"));
+    } catch (ClassNotFoundException e) {
+      throw new RuntimeException(e);
+    }
+
+    FileSinkOperator.RecordWriter recordWriter =
+        baseOutputFormat.getHiveRecordWriter(
+            jobConf, childPath, valueClass, isCompressed, tableProperties,
+            InternalUtil.createReporter(context));
+    setBaseRecordWriter(recordWriter);
   }
 
   @Override
   public void close(TaskAttemptContext context) throws IOException, InterruptedException {
-    Reporter reporter = InternalUtil.createReporter(context);
-    getBaseRecordWriter().close(reporter);
+    getBaseRecordWriter().close(false);
   }
 
   @Override

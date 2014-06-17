@@ -31,13 +31,16 @@ import org.apache.hadoop.mapreduce.JobID;
 
 public class HCatMapRedUtil {
 
-  public static TaskAttemptContext createTaskAttemptContext(org.apache.hadoop.mapreduce.TaskAttemptContext context) {
-    return  createTaskAttemptContext(new JobConf(context.getConfiguration()),
-                              org.apache.hadoop.mapred.TaskAttemptID.forName(context.getTaskAttemptID().toString()),
-                               Reporter.NULL);
+  public static TaskAttemptContext createTaskAttemptContext(
+      org.apache.hadoop.mapreduce.TaskAttemptContext context) {
+    String taskAttemptId = context.getTaskAttemptID().toString();
+    return createTaskAttemptContext(new JobConf(context.getConfiguration()),
+        org.apache.hadoop.mapred.TaskAttemptID.forName(taskAttemptId),
+        Reporter.NULL);
   }
 
-  public static org.apache.hadoop.mapreduce.TaskAttemptContext createTaskAttemptContext(Configuration conf, org.apache.hadoop.mapreduce.TaskAttemptID id) {
+  public static org.apache.hadoop.mapreduce.TaskAttemptContext createTaskAttemptContext(
+      Configuration conf, org.apache.hadoop.mapreduce.TaskAttemptID id) {
     return ShimLoader.getHadoopShims().getHCatShim().createTaskAttemptContext(conf,id);
   }
 

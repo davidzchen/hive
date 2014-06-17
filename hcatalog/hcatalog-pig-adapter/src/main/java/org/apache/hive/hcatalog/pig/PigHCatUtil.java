@@ -206,7 +206,7 @@ class PigHCatUtil {
     HiveMetaStoreClient client = null;
     try {
       client = getHiveMetaClient(hcatServerUri, hcatServerPrincipal, PigHCatUtil.class, job);
-      table = HCatUtil.getTable(client, dbName, tableName);
+      table = new Table(client.getTable(dbName, tableName));
     } catch (NoSuchObjectException nsoe) {
       throw new PigException("Table not found : " + nsoe.getMessage(), PIG_EXCEPTION_CODE); // prettier error messages to frontend
     } catch (Exception e) {

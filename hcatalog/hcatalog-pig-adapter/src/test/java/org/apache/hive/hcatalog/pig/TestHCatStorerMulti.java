@@ -41,6 +41,7 @@ import org.apache.hadoop.hive.ql.session.SessionState;
 
 import org.apache.hive.hcatalog.common.HCatUtil;
 import org.apache.hive.hcatalog.data.Pair;
+import org.apache.hive.hcatalog.common.TestUtil;
 
 import org.apache.pig.ExecType;
 import org.apache.pig.PigServer;

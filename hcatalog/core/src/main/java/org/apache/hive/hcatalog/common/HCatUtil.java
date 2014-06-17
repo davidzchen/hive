@@ -61,6 +61,7 @@ import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.delegation.AbstractDelegationTokenIdentifier;
 import org.apache.hadoop.util.ReflectionUtils;
+
 import org.apache.hive.hcatalog.data.Pair;
 import org.apache.hive.hcatalog.data.schema.HCatFieldSchema;
 import org.apache.hive.hcatalog.data.schema.HCatSchema;
@@ -72,6 +73,7 @@ import org.apache.hive.hcatalog.mapreduce.OutputJobInfo;
 import org.apache.hive.hcatalog.mapreduce.PartInfo;
 import org.apache.hive.hcatalog.mapreduce.StorerInfo;
 import org.apache.thrift.TException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -409,7 +411,7 @@ public class HCatUtil {
                              String serDe,
                              String inputFormat,
                              String outputFormat)
-    throws IOException {
+      throws IOException {
 
     if ((storageHandler == null) || (storageHandler.equals(FosterStorageHandler.class.getName()))) {
       try {
@@ -480,18 +482,17 @@ public class HCatUtil {
 
   @InterfaceAudience.Private
   @InterfaceStability.Evolving
-  public static void
-  configureOutputStorageHandler(HiveStorageHandler storageHandler,
-                  Configuration conf,
-                  OutputJobInfo outputJobInfo) {
-    //TODO replace IgnoreKeyTextOutputFormat with a
-    //HiveOutputFormatWrapper in StorageHandler
+  public static TableDesc configureOutputStorageHandler(
+      HiveStorageHandler storageHandler, Configuration conf, OutputJobInfo outputJobInfo) {
+    // TODO replace IgnoreKeyTextOutputFormat with a
+    // HiveOutputFormatWrapper in StorageHandler
     Properties props = outputJobInfo.getTableInfo().getStorerInfo().getProperties();
-    props.put(serdeConstants.SERIALIZATION_LIB,storageHandler.getSerDeClass().getName());
+    props.put(serdeConstants.SERIALIZATION_LIB, storageHandler.getSerDeClass().getName());
     TableDesc tableDesc = new TableDesc(storageHandler.getInputFormatClass(),
-      IgnoreKeyTextOutputFormat.class,props);
-    if (tableDesc.getJobProperties() == null)
+        IgnoreKeyTextOutputFormat.class, props);
+    if (tableDesc.getJobProperties() == null) {
       tableDesc.setJobProperties(new HashMap<String, String>());
+    }
     for (Map.Entry<String, String> el : conf) {
       tableDesc.getJobProperties().put(el.getKey(), el.getValue());
     }
@@ -503,19 +504,16 @@ public class HCatUtil {
 
     Map<String, String> jobProperties = new HashMap<String, String>();
     try {
-      tableDesc.getJobProperties().put(
-        HCatConstants.HCAT_KEY_OUTPUT_INFO,
-        HCatUtil.serialize(outputJobInfo));
+      tableDesc.getJobProperties().put(HCatConstants.HCAT_KEY_OUTPUT_INFO,
+          HCatUtil.serialize(outputJobInfo));
 
-      storageHandler.configureOutputJobProperties(tableDesc,
-        jobProperties);
-
+      storageHandler.configureOutputJobProperties(tableDesc, jobProperties);
       Map<String, String> tableJobProperties = tableDesc.getJobProperties();
       if (tableJobProperties != null) {
         if (tableJobProperties.containsKey(HCatConstants.HCAT_KEY_OUTPUT_INFO)) {
           String jobString = tableJobProperties.get(HCatConstants.HCAT_KEY_OUTPUT_INFO);
           if (jobString != null) {
-            if  (!jobProperties.containsKey(HCatConstants.HCAT_KEY_OUTPUT_INFO)) {
+            if (!jobProperties.containsKey(HCatConstants.HCAT_KEY_OUTPUT_INFO)) {
               jobProperties.put(HCatConstants.HCAT_KEY_OUTPUT_INFO,
                   tableJobProperties.get(HCatConstants.HCAT_KEY_OUTPUT_INFO));
             }
@@ -529,6 +527,8 @@ public class HCatUtil {
       throw new IllegalStateException(
         "Failed to configure StorageHandler", e);
     }
+
+    return tableDesc;
   }
 
   /**

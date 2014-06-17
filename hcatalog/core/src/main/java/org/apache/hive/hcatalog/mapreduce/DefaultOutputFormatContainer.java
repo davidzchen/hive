@@ -19,19 +19,28 @@
 
 package org.apache.hive.hcatalog.mapreduce;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
-
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.exec.Utilities;
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.ql.metadata.Table;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputCommitter;
 import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+
 import org.apache.hive.hcatalog.common.HCatUtil;
+import org.apache.hive.hcatalog.common.HCatConstants;
 import org.apache.hive.hcatalog.data.HCatRecord;
 
 import java.io.IOException;
 import java.text.NumberFormat;
+import java.util.Properties;
 
 /**
  * Bare bones implementation of OutputFormatContainer. Does only the required
@@ -47,7 +56,7 @@ class DefaultOutputFormatContainer extends OutputFormatContainer {
     NUMBER_FORMAT.setGroupingUsed(false);
   }
 
-  public DefaultOutputFormatContainer(org.apache.hadoop.mapred.OutputFormat<WritableComparable<?>, Writable> of) {
+  public DefaultOutputFormatContainer(HiveOutputFormat of) {
     super(of);
   }
 
@@ -63,13 +72,10 @@ class DefaultOutputFormatContainer extends OutputFormatContainer {
    * @throws IOException
    */
   @Override
-  public RecordWriter<WritableComparable<?>, HCatRecord>
-  getRecordWriter(TaskAttemptContext context) throws IOException, InterruptedException {
-    String name = getOutputName(context.getTaskAttemptID().getTaskID().getId());
-    return new DefaultRecordWriterContainer(context,
-      getBaseOutputFormat().getRecordWriter(null, new JobConf(context.getConfiguration()), name, InternalUtil.createReporter(context)));
+  public RecordWriter<WritableComparable<?>, HCatRecord> getRecordWriter(
+      TaskAttemptContext context) throws IOException, InterruptedException {
+    return new DefaultRecordWriterContainer(context, getBaseOutputFormat());
   }
-
 
   /**
    * Get the output committer for this output format. This is responsible
@@ -81,8 +87,9 @@ class DefaultOutputFormatContainer extends OutputFormatContainer {
    */
   @Override
   public OutputCommitter getOutputCommitter(TaskAttemptContext context)
-    throws IOException, InterruptedException {
-    return new DefaultOutputCommitterContainer(context, new JobConf(context.getConfiguration()).getOutputCommitter());
+      throws IOException, InterruptedException {
+    return new DefaultOutputCommitterContainer(context,
+        new JobConf(context.getConfiguration()).getOutputCommitter());
   }
 
   /**

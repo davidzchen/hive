@@ -22,14 +22,18 @@ package org.apache.hive.hcatalog.mapreduce;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
+import org.apache.hadoop.hive.ql.io.IOConstants;
 import org.apache.hadoop.hive.serde.serdeConstants;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatException;
+import org.apache.hive.hcatalog.common.TestUtil;
 import org.apache.hive.hcatalog.data.DefaultHCatRecord;
 import org.apache.hive.hcatalog.data.HCatRecord;
 import org.apache.hive.hcatalog.data.schema.HCatFieldSchema;
@@ -38,21 +42,31 @@ import org.apache.hive.hcatalog.data.schema.HCatSchemaUtils;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
-import static junit.framework.Assert.assertEquals;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assume.assumeTrue;
 
 public class TestHCatPartitioned extends HCatMapReduceTest {
 
   private static List<HCatRecord> writeRecords;
   private static List<HCatFieldSchema> partitionColumns;
 
-  public TestHCatPartitioned(String formatName, String serdeClass, String inputFormatClass,
+  @Override
+  protected Map<String, Set<String>> getDisabledStorageFormats() {
+    return new HashMap<String, Set<String>>() {{
+      put(IOConstants.PARQUETFILE, new HashSet<String>() {{
+        add("testHCatPartitionedTable");
+      }});
+    }};
+  }
+
+  public TestHCatPartitioned(String storageFormat, String serdeClass, String inputFormatClass,
       String outputFormatClass) throws Exception {
-    super(formatName, serdeClass, inputFormatClass, outputFormatClass);
-    tableName = "testHCatPartitionedTable_" + formatName;
+    super(storageFormat, serdeClass, inputFormatClass, outputFormatClass);
+    tableName = "testHCatPartitionedTable_" + storageFormat;
     writeRecords = new ArrayList<HCatRecord>();
 
     for (int i = 0; i < 20; i++) {
@@ -88,7 +102,7 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
 
   @Test
   public void testHCatPartitionedTable() throws Exception {
-
+    assumeTrue(!TestUtil.shouldSkip(storageFormat, getDisabledStorageFormats()));
     Map<String, String> partitionMap = new HashMap<String, String>();
     partitionMap.put("part1", "p1value1");
     partitionMap.put("part0", "p0value1");
@@ -101,7 +115,7 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
 
     runMRCreate(partitionMap, partitionColumns, writeRecords, 20, true);
 
-    //Test for duplicate publish -- this will either fail on job creation time
+    // Test for duplicate publish -- this will either fail on job creation time
     // and throw an exception, or will fail at runtime, and fail the job.
 
     IOException exc = null;
@@ -117,7 +131,7 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
       assertNull(exc);
     }
 
-    //Test for publish with invalid partition key name
+    // Test for publish with invalid partition key name
     exc = null;
     partitionMap.clear();
     partitionMap.put("px1", "p1value2");
@@ -133,7 +147,7 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
       assertEquals(ErrorType.ERROR_MISSING_PARTITION_KEY, ((HCatException) exc).getErrorType());
     }
 
-    //Test for publish with missing partition key values
+    // Test for publish with missing partition key values
     exc = null;
     partitionMap.clear();
     partitionMap.put("px", "p1value2");
@@ -148,8 +162,7 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     assertTrue(exc instanceof HCatException);
     assertEquals(ErrorType.ERROR_INVALID_PARTITION_VALUES, ((HCatException) exc).getErrorType());
 
-
-    //Test for null partition value map
+    // Test for null partition value map
     exc = null;
     try {
       runMRCreate(null, partitionColumns, writeRecords, 20, false);
@@ -158,21 +171,22 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     }
 
     assertTrue(exc == null);
-//    assertTrue(exc instanceof HCatException);
-//    assertEquals(ErrorType.ERROR_PUBLISHING_PARTITION, ((HCatException) exc).getErrorType());
+    //assertTrue(exc instanceof HCatException);
+    //assertEquals(ErrorType.ERROR_PUBLISHING_PARTITION, ((HCatException) exc).getErrorType());
+
     // With Dynamic partitioning, this isn't an error that the keyValues specified didn't values
 
-    //Read should get 10 + 20 rows if immutable, 50 (10+20+20) if mutable
-    if (isTableImmutable()){
+    // Read should get 10 + 20 rows if immutable, 50 (10+20+20) if mutable
+    if (isTableImmutable()) {
       runMRRead(30);
     } else {
       runMRRead(50);
     }
 
-    //Read with partition filter
+    // Read with partition filter
     runMRRead(10, "part1 = \"p1value1\"");
     runMRRead(10, "part0 = \"p0value1\"");
-    if (isTableImmutable()){
+    if (isTableImmutable()) {
       runMRRead(20, "part1 = \"p1value2\"");
       runMRRead(30, "part1 = \"p1value1\" or part1 = \"p1value2\"");
       runMRRead(20, "part0 = \"p0value2\"");
@@ -189,26 +203,24 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     hiveReadTest();
   }
 
-
-  //test that new columns gets added to table schema
+  /*
+   * Test that new columns gets added to table schema.
+   */
   private void tableSchemaTest() throws Exception {
-
     HCatSchema tableSchema = getTableSchema();
-
     assertEquals(4, tableSchema.getFields().size());
 
-    //Update partition schema to have 3 fields
-    partitionColumns.add(HCatSchemaUtils.getHCatFieldSchema(new FieldSchema("c3", serdeConstants.STRING_TYPE_NAME, "")));
+    // Update partition schema to have 3 fields
+    partitionColumns.add(
+        HCatSchemaUtils.getHCatFieldSchema(
+            new FieldSchema("c3", serdeConstants.STRING_TYPE_NAME, "")));
 
     writeRecords = new ArrayList<HCatRecord>();
-
     for (int i = 0; i < 20; i++) {
       List<Object> objList = new ArrayList<Object>();
-
       objList.add(i);
       objList.add("strvalue" + i);
       objList.add("str2value" + i);
-
       writeRecords.add(new DefaultHCatRecord(objList));
     }
 
@@ -220,7 +232,7 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
 
     tableSchema = getTableSchema();
 
-    //assert that c3 has got added to table schema
+    // Assert that c3 has got added to table schema
     assertEquals(5, tableSchema.getFields().size());
     assertEquals("c1", tableSchema.getFields().get(0).getName());
     assertEquals("c2", tableSchema.getFields().get(1).getName());
@@ -228,7 +240,7 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     assertEquals("part1", tableSchema.getFields().get(3).getName());
     assertEquals("part0", tableSchema.getFields().get(4).getName());
 
-    //Test that changing column data type fails
+    // Test that changing column data type fails
     partitionMap.clear();
     partitionMap.put("part1", "p1value6");
     partitionMap.put("part0", "p0value6");
@@ -248,7 +260,7 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     assertTrue(exc instanceof HCatException);
     assertEquals(ErrorType.ERROR_SCHEMA_TYPE_MISMATCH, ((HCatException) exc).getErrorType());
 
-    //Test that partition key is not allowed in data
+    // Test that partition key is not allowed in data
     partitionColumns = new ArrayList<HCatFieldSchema>();
     partitionColumns.add(HCatSchemaUtils.getHCatFieldSchema(new FieldSchema("c1", serdeConstants.INT_TYPE_NAME, "")));
     partitionColumns.add(HCatSchemaUtils.getHCatFieldSchema(new FieldSchema("c2", serdeConstants.STRING_TYPE_NAME, "")));
@@ -258,12 +270,10 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     List<HCatRecord> recordsContainingPartitionCols = new ArrayList<HCatRecord>(20);
     for (int i = 0; i < 20; i++) {
       List<Object> objList = new ArrayList<Object>();
-
       objList.add(i);
       objList.add("c2value" + i);
       objList.add("c3value" + i);
       objList.add("p1value6");
-
       recordsContainingPartitionCols.add(new DefaultHCatRecord(objList));
     }
 
@@ -290,11 +300,11 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     }
   }
 
-  //check behavior while change the order of columns
+  /*
+   * Check behavior while change the order of columns
+   */
   private void columnOrderChangeTest() throws Exception {
-
     HCatSchema tableSchema = getTableSchema();
-
     assertEquals(5, tableSchema.getFields().size());
 
     partitionColumns = new ArrayList<HCatFieldSchema>();
@@ -302,16 +312,12 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     partitionColumns.add(HCatSchemaUtils.getHCatFieldSchema(new FieldSchema("c3", serdeConstants.STRING_TYPE_NAME, "")));
     partitionColumns.add(HCatSchemaUtils.getHCatFieldSchema(new FieldSchema("c2", serdeConstants.STRING_TYPE_NAME, "")));
 
-
     writeRecords = new ArrayList<HCatRecord>();
-
     for (int i = 0; i < 10; i++) {
       List<Object> objList = new ArrayList<Object>();
-
       objList.add(i);
       objList.add("co strvalue" + i);
       objList.add("co str2value" + i);
-
       writeRecords.add(new DefaultHCatRecord(objList));
     }
 
@@ -330,38 +336,35 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     assertTrue(exc instanceof HCatException);
     assertEquals(ErrorType.ERROR_SCHEMA_COLUMN_MISMATCH, ((HCatException) exc).getErrorType());
 
-
     partitionColumns = new ArrayList<HCatFieldSchema>();
     partitionColumns.add(HCatSchemaUtils.getHCatFieldSchema(new FieldSchema("c1", serdeConstants.INT_TYPE_NAME, "")));
     partitionColumns.add(HCatSchemaUtils.getHCatFieldSchema(new FieldSchema("c2", serdeConstants.STRING_TYPE_NAME, "")));
 
     writeRecords = new ArrayList<HCatRecord>();
-
     for (int i = 0; i < 10; i++) {
       List<Object> objList = new ArrayList<Object>();
-
       objList.add(i);
       objList.add("co strvalue" + i);
-
       writeRecords.add(new DefaultHCatRecord(objList));
     }
 
     runMRCreate(partitionMap, partitionColumns, writeRecords, 10, true);
 
     if (isTableImmutable()){
-      //Read should get 10 + 20 + 10 + 10 + 20 rows
+      // Read should get 10 + 20 + 10 + 10 + 20 rows
       runMRRead(70);
     } else {
-      runMRRead(90); // +20 from the duplicate publish
+      // +20 from the duplicate publish
+      runMRRead(90);
     }
   }
 
-  //Test that data inserted through hcatoutputformat is readable from hive
+  /*
+   * Test that data inserted through hcatoutputformat is readable from hive.
+   */
   private void hiveReadTest() throws Exception {
-
     String query = "select * from " + tableName;
     int retCode = driver.run(query).getResponseCode();
-
     if (retCode != 0) {
       throw new Exception("Error " + retCode + " running query " + query);
     }
@@ -369,11 +372,11 @@ public class TestHCatPartitioned extends HCatMapReduceTest {
     ArrayList<String> res = new ArrayList<String>();
     driver.getResults(res);
     if (isTableImmutable()){
-      //Read should get 10 + 20 + 10 + 10 + 20 rows
+      // Read should get 10 + 20 + 10 + 10 + 20 rows
       assertEquals(70, res.size());
     } else {
-      assertEquals(90, res.size()); // +20 from the duplicate publish
+      // +20 from the duplicate publish
+      assertEquals(90, res.size());
     }
-
   }
 }

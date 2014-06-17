@@ -22,14 +22,18 @@ package org.apache.hive.hcatalog.mapreduce;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.serde.serdeConstants;
+import org.apache.hadoop.hive.ql.io.IOConstants;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatException;
+import org.apache.hive.hcatalog.common.TestUtil;
 import org.apache.hive.hcatalog.data.DefaultHCatRecord;
 import org.apache.hive.hcatalog.data.HCatRecord;
 import org.apache.hive.hcatalog.data.schema.HCatFieldSchema;
@@ -38,6 +42,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 import static junit.framework.Assert.assertEquals;
+import static org.junit.Assume.assumeTrue;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -46,11 +51,16 @@ public class TestHCatNonPartitioned extends HCatMapReduceTest {
   private static List<HCatRecord> writeRecords;
   static List<HCatFieldSchema> partitionColumns;
 
-  public TestHCatNonPartitioned(String formatName, String serdeClass, String inputFormatClass,
+  @Override
+  protected Map<String, Set<String>> getDisabledStorageFormats() {
+    return new HashMap<String, Set<String>>();
+  }
+
+  public TestHCatNonPartitioned(String storageFormat, String serdeClass, String inputFormatClass,
       String outputFormatClass) throws Exception {
-    super(formatName, serdeClass, inputFormatClass, outputFormatClass);
+    super(storageFormat, serdeClass, inputFormatClass, outputFormatClass);
     dbName = null; //test if null dbName works ("default" is used)
-    tableName = "testHCatNonPartitionedTable_" + formatName;
+    tableName = "testHCatNonPartitionedTable_" + storageFormat;
     writeRecords = new ArrayList<HCatRecord>();
 
     for (int i = 0; i < 20; i++) {
@@ -84,6 +94,7 @@ public class TestHCatNonPartitioned extends HCatMapReduceTest {
 
   @Test
   public void testHCatNonPartitionedTable() throws Exception {
+    assumeTrue(!TestUtil.shouldSkip(storageFormat, getDisabledStorageFormats()));
 
     Map<String, String> partitionMap = new HashMap<String, String>();
     runMRCreate(null, partitionColumns, writeRecords, 10, true);

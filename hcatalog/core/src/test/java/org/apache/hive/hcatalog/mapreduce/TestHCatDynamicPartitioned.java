@@ -21,18 +21,24 @@ package org.apache.hive.hcatalog.mapreduce;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
-import junit.framework.Assert;
+import org.junit.Assert;
 
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
+import org.apache.hadoop.hive.ql.io.IOConstants;
 import org.apache.hadoop.hive.serde.serdeConstants;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hive.hcatalog.common.HCatUtil;
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatConstants;
 import org.apache.hive.hcatalog.common.HCatException;
+import org.apache.hive.hcatalog.common.TestUtil;
 import org.apache.hive.hcatalog.data.DefaultHCatRecord;
 import org.apache.hive.hcatalog.data.HCatRecord;
 import org.apache.hive.hcatalog.data.schema.HCatFieldSchema;
@@ -44,8 +50,9 @@ import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static junit.framework.Assert.assertEquals;
-import static junit.framework.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 
 public class TestHCatDynamicPartitioned extends HCatMapReduceTest {
 
@@ -55,10 +62,15 @@ public class TestHCatDynamicPartitioned extends HCatMapReduceTest {
   protected static final int NUM_RECORDS = 20;
   protected static final int NUM_PARTITIONS = 5;
 
-  public TestHCatDynamicPartitioned(String formatName, String serdeClass, String inputFormatClass,
+  @Override
+  protected Map<String, Set<String>> getDisabledStorageFormats() {
+    return new HashMap<String, Set<String>>();
+  }
+
+  public TestHCatDynamicPartitioned(String storageFormat, String serdeClass, String inputFormatClass,
       String outputFormatClass) throws Exception {
-    super(formatName, serdeClass, inputFormatClass, outputFormatClass);
-    tableName = "testHCatDynamicPartitionedTable_" + formatName;
+    super(storageFormat, serdeClass, inputFormatClass, outputFormatClass);
+    tableName = "testHCatDynamicPartitionedTable_" + storageFormat;
     generateWriteRecords(NUM_RECORDS, NUM_PARTITIONS, 0);
     generateDataColumns();
   }
@@ -104,6 +116,7 @@ public class TestHCatDynamicPartitioned extends HCatMapReduceTest {
    */
   @Test
   public void testHCatDynamicPartitionedTable() throws Exception {
+    assumeTrue(!TestUtil.shouldSkip(storageFormat, getDisabledStorageFormats()));
     runHCatDynamicPartitionedTable(true, null);
   }
 
@@ -113,12 +126,14 @@ public class TestHCatDynamicPartitioned extends HCatMapReduceTest {
    */
   @Test
   public void testHCatDynamicPartitionedTableMultipleTask() throws Exception {
+    assumeTrue(!TestUtil.shouldSkip(storageFormat, getDisabledStorageFormats()));
     runHCatDynamicPartitionedTable(false, null);
   }
 
   protected void runHCatDynamicPartitionedTable(boolean asSingleMapTask,
       String customDynamicPathPattern) throws Exception {
     generateWriteRecords(NUM_RECORDS, NUM_PARTITIONS, 0);
+    assertEquals(NUM_RECORDS, writeRecords.size());
     runMRCreate(null, dataColumns, writeRecords, NUM_RECORDS, true, asSingleMapTask, customDynamicPathPattern);
 
     runMRRead(NUM_RECORDS);

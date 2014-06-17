@@ -25,12 +25,16 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
+import org.apache.hadoop.hive.ql.io.HiveFileFormatUtils;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.metadata.Table;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputFormat;
 import org.apache.hadoop.util.ReflectionUtils;
+
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatConstants;
 import org.apache.hive.hcatalog.common.HCatException;
@@ -60,8 +64,7 @@ public abstract class HCatBaseOutputFormat extends OutputFormat<WritableComparab
    * @throws IOException when output should not be attempted
    */
   @Override
-  public void checkOutputSpecs(JobContext context
-  ) throws IOException, InterruptedException {
+  public void checkOutputSpecs(JobContext context) throws IOException, InterruptedException {
     getOutputFormat(context).checkOutputSpecs(context);
   }
 
@@ -71,20 +74,23 @@ public abstract class HCatBaseOutputFormat extends OutputFormat<WritableComparab
    * @return the output format instance
    * @throws IOException
    */
-  protected OutputFormat<WritableComparable<?>, HCatRecord> getOutputFormat(JobContext context) 
-    throws IOException {
+  protected OutputFormat<WritableComparable<?>, HCatRecord> getOutputFormat(JobContext context)
+      throws IOException {
     OutputJobInfo jobInfo = getJobInfo(context.getConfiguration());
-    HiveStorageHandler storageHandler = HCatUtil.getStorageHandler(context.getConfiguration(), 
+    HiveStorageHandler storageHandler = HCatUtil.getStorageHandler(context.getConfiguration(),
         jobInfo.getTableInfo().getStorerInfo());
     // Always configure storage handler with jobproperties/jobconf before calling any methods on it
     configureOutputStorageHandler(context);
+
+    // If the OutputFormat is not a HiveOutputFormat, find a substitute.
+    Table table = new Table(jobInfo.getTableInfo().getTable());
+    Class<? extends HiveOutputFormat> outputFormatClass = table.getOutputFormatClass();
     if (storageHandler instanceof FosterStorageHandler) {
-      return new FileOutputFormatContainer(ReflectionUtils.newInstance(
-          storageHandler.getOutputFormatClass(),context.getConfiguration()));
-    }
-    else { 
-      return new DefaultOutputFormatContainer(ReflectionUtils.newInstance(
-          storageHandler.getOutputFormatClass(),context.getConfiguration()));
+      return new FileOutputFormatContainer(
+          ReflectionUtils.newInstance(outputFormatClass, context.getConfiguration()));
+    } else {
+      return new DefaultOutputFormatContainer(
+          ReflectionUtils.newInstance(outputFormatClass, context.getConfiguration()));
     }
   }
 
@@ -146,13 +152,6 @@ public abstract class HCatBaseOutputFormat extends OutputFormat<WritableComparab
           partitionValues.put(dynamicPartKeys.get(i), dynamicPartVals.get(i));
         }
 
-//            // re-home location, now that we know the rest of the partvals
-//            Table table = jobInfo.getTableInfo().getTable();
-//
-//            List<String> partitionCols = new ArrayList<String>();
-//            for(FieldSchema schema : table.getPartitionKeys()) {
-//              partitionCols.add(schema.getName());
-//            }
         jobInfo.setPartitionValues(partitionValues);
       }
 

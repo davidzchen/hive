@@ -54,6 +54,7 @@ import org.apache.hadoop.mapreduce.Job;
 import org.apache.hive.hcatalog.HcatTestUtils;
 import org.apache.hive.hcatalog.common.HCatUtil;
 import org.apache.hive.hcatalog.common.HCatConstants;
+import org.apache.hive.hcatalog.common.TestUtil;
 import org.apache.hive.hcatalog.data.Pair;
 import org.apache.hive.hcatalog.data.schema.HCatFieldSchema;
 

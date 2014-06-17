@@ -39,6 +39,7 @@ import org.apache.hadoop.hive.ql.io.IOConstants;
 import org.apache.hadoop.hive.ql.io.StorageFormats;
 import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse;
 import org.apache.hadoop.hive.ql.session.SessionState;
+import org.apache.hive.hcatalog.common.TestUtil;
 
 import org.apache.pig.ExecType;
 import org.apache.pig.PigServer;
