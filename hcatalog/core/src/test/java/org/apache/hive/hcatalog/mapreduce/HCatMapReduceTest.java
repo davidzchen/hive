@@ -154,7 +154,6 @@ public abstract class HCatMapReduceTest extends HCatBaseTest {
    * List of SerDe classes that the HCatalog core tests will not be run against.
    */
   protected static final String[] DISABLED_SERDES = new String[] {
-    AvroSerDe.class.getName(),
     ParquetHiveSerDe.class.getName(),
     MetadataTypedColumnsetSerDe.class.getName(),
     LazyBinarySerDe.class.getName(),
@@ -300,6 +299,7 @@ public abstract class HCatMapReduceTest extends HCatBaseTest {
           + "parameters. Please add " + serdeClass + " to the test parameters.",
           testSerdes.contains(serdeClass) || disabledSerdes.contains(serdeClass));
     }
+
     return parameters;
   }
 

@@ -19,9 +19,11 @@
 
 package org.apache.hive.hcatalog.mapreduce;
 
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.OutputFormat;
+
 import org.apache.hive.hcatalog.data.HCatRecord;
 
 /**
@@ -34,19 +36,19 @@ import org.apache.hive.hcatalog.data.HCatRecord;
  *  such as partitioning isn't supported.
  */
 abstract class OutputFormatContainer extends OutputFormat<WritableComparable<?>, HCatRecord> {
-  private org.apache.hadoop.mapred.OutputFormat<? super WritableComparable<?>, ? super Writable> of;
+  private HiveOutputFormat of;
 
   /**
    * @param of OutputFormat this instance will contain
    */
-  public OutputFormatContainer(org.apache.hadoop.mapred.OutputFormat<? super WritableComparable<?>, ? super Writable> of) {
+  public OutputFormatContainer(HiveOutputFormat of) {
     this.of = of;
   }
 
   /**
    * @return underlying OutputFormat
    */
-  public org.apache.hadoop.mapred.OutputFormat getBaseOutputFormat() {
+  public HiveOutputFormat getBaseOutputFormat() {
     return of;
   }
 

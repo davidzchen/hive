@@ -19,18 +19,22 @@
 
 package org.apache.hive.hcatalog.mapreduce;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.MetaStoreUtils;
-import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
+import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.metadata.Table;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Writable;
@@ -43,11 +47,13 @@ import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter;
 import org.apache.hadoop.util.ReflectionUtils;
+
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatConstants;
 import org.apache.hive.hcatalog.common.HCatException;
 import org.apache.hive.hcatalog.common.HCatUtil;
 import org.apache.hive.hcatalog.data.HCatRecord;
+
 import org.apache.thrift.TException;
 
 import java.io.IOException;
@@ -64,52 +70,67 @@ class FileOutputFormatContainer extends OutputFormatContainer {
   /**
    * @param of base OutputFormat to contain
    */
-  public FileOutputFormatContainer(org.apache.hadoop.mapred.OutputFormat<? super WritableComparable<?>, ? super Writable> of) {
+  public FileOutputFormatContainer(HiveOutputFormat of) {
     super(of);
   }
 
   @Override
-  public RecordWriter<WritableComparable<?>, HCatRecord> getRecordWriter(TaskAttemptContext context) throws IOException, InterruptedException {
-    //this needs to be manually set, under normal circumstances MR Task does this
+  public RecordWriter<WritableComparable<?>, HCatRecord> getRecordWriter(TaskAttemptContext context)
+      throws IOException, InterruptedException {
+    // This needs to be manually set, under normal circumstances MR Task does this.
     setWorkOutputPath(context);
 
     //Configure the output key and value classes.
     // This is required for writing null as key for file based tables.
-    context.getConfiguration().set("mapred.output.key.class",
-      NullWritable.class.getName());
-    String jobInfoString = context.getConfiguration().get(
-      HCatConstants.HCAT_KEY_OUTPUT_INFO);
-    OutputJobInfo jobInfo = (OutputJobInfo) HCatUtil
-      .deserialize(jobInfoString);
+    context.getConfiguration().set("mapred.output.key.class", NullWritable.class.getName());
+    String jobInfoString = context.getConfiguration().get(HCatConstants.HCAT_KEY_OUTPUT_INFO);
+    OutputJobInfo jobInfo = (OutputJobInfo) HCatUtil.deserialize(jobInfoString);
     StorerInfo storeInfo = jobInfo.getTableInfo().getStorerInfo();
     HiveStorageHandler storageHandler = HCatUtil.getStorageHandler(
-      context.getConfiguration(), storeInfo);
+        context.getConfiguration(), storeInfo);
     Class<? extends SerDe> serde = storageHandler.getSerDeClass();
-    SerDe sd = (SerDe) ReflectionUtils.newInstance(serde,
-      context.getConfiguration());
-    context.getConfiguration().set("mapred.output.value.class",
-      sd.getSerializedClass().getName());
+    SerDe sd = (SerDe) ReflectionUtils.newInstance(serde, context.getConfiguration());
+    context.getConfiguration().set("mapred.output.value.class", sd.getSerializedClass().getName());
 
     RecordWriter<WritableComparable<?>, HCatRecord> rw;
-    if (HCatBaseOutputFormat.getJobInfo(context.getConfiguration()).isDynamicPartitioningUsed()){
-      // When Dynamic partitioning is used, the RecordWriter instance initialized here isn't used. Can use null.
-      // (That's because records can't be written until the values of the dynamic partitions are deduced.
-      // By that time, a new local instance of RecordWriter, with the correct output-path, will be constructed.)
-      rw = new DynamicPartitionFileRecordWriterContainer(
-          (org.apache.hadoop.mapred.RecordWriter)null, context);
+    if (HCatBaseOutputFormat.getJobInfo(context.getConfiguration()).isDynamicPartitioningUsed()) {
+      // When Dynamic partitioning is used, the RecordWriter instance initialized here isn't used.
+      // Can use null. (That's because records can't be written until the values of the dynamic
+      // partitions are deduced. By that time, a new local instance of RecordWriter, with the
+      // correct output-path, will be constructed.)
+      rw = new DynamicPartitionFileRecordWriterContainer(null, context);
     } else {
-      Path parentDir = new Path(context.getConfiguration().get("mapred.work.output.dir"));
-      Path childPath = new Path(parentDir,FileOutputFormat.getUniqueName(new JobConf(context.getConfiguration()), "part"));
-
-      rw = new StaticPartitionFileRecordWriterContainer(
-          getBaseOutputFormat().getRecordWriter(
-              parentDir.getFileSystem(context.getConfiguration()),
-              new JobConf(context.getConfiguration()),
-              childPath.toString(),
-              InternalUtil.createReporter(context)),
-          context);
+      rw = getStaticPartitionedRecordWriter(jobInfo, context);
     }
     return rw;
+  }
+
+  private RecordWriter<WritableComparable<?>, HCatRecord> getStaticPartitionedRecordWriter(
+      OutputJobInfo jobInfo, TaskAttemptContext context) throws IOException, InterruptedException {
+    Configuration conf = context.getConfiguration();
+    JobConf jobConf = new JobConf(conf);
+    Path parentDir = new Path(conf.get("mapred.work.output.dir"));
+    Path childPath = new Path(parentDir,
+        FileOutputFormat.getUniqueName(jobConf, "part"));
+
+    boolean isCompressed = conf.getBoolean("mapred.output.compress", false);
+    Class<? extends Writable> valueClass = null;
+    try {
+      valueClass = (Class<? extends Writable>)
+          Class.forName(conf.get("mapred.output.value.class"));
+    } catch (ClassNotFoundException e) {
+      throw new RuntimeException(e);
+    }
+    FileSinkOperator.RecordWriter recordWriter =
+        getBaseOutputFormat().getHiveRecordWriter(
+            jobConf,
+            childPath,
+            valueClass,
+            isCompressed,
+            jobInfo.getTableInfo().getStorerInfo().getProperties(),
+            InternalUtil.createReporter(context));
+
+    return new StaticPartitionFileRecordWriterContainer(recordWriter, context);
   }
 
   @Override

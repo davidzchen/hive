@@ -31,11 +31,12 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hive.common.classification.InterfaceAudience;
 import org.apache.hadoop.hive.common.classification.InterfaceStability;
 import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.Index;
 import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.metadata.Table;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.Job;
@@ -43,12 +44,14 @@ import org.apache.hadoop.mapreduce.OutputCommitter;
 import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.security.Credentials;
+
 import org.apache.hive.hcatalog.common.ErrorType;
 import org.apache.hive.hcatalog.common.HCatConstants;
 import org.apache.hive.hcatalog.common.HCatException;
 import org.apache.hive.hcatalog.common.HCatUtil;
 import org.apache.hive.hcatalog.data.HCatRecord;
 import org.apache.hive.hcatalog.data.schema.HCatSchema;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -254,9 +257,8 @@ public class HCatOutputFormat extends HCatBaseOutputFormat {
    * @throws InterruptedException
    */
   @Override
-  public RecordWriter<WritableComparable<?>, HCatRecord>
-  getRecordWriter(TaskAttemptContext context)
-    throws IOException, InterruptedException {
+  public RecordWriter<WritableComparable<?>, HCatRecord> getRecordWriter(TaskAttemptContext context)
+      throws IOException, InterruptedException {
     return getOutputFormat(context).getRecordWriter(context);
   }
 
@@ -270,8 +272,8 @@ public class HCatOutputFormat extends HCatBaseOutputFormat {
    * @throws InterruptedException
    */
   @Override
-  public OutputCommitter getOutputCommitter(TaskAttemptContext context
-  ) throws IOException, InterruptedException {
+  public OutputCommitter getOutputCommitter(TaskAttemptContext context)
+      throws IOException, InterruptedException {
     return getOutputFormat(context).getOutputCommitter(context);
   }
 

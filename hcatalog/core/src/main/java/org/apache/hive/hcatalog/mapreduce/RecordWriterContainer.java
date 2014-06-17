@@ -24,29 +24,30 @@ import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
 import org.apache.hive.hcatalog.data.HCatRecord;
 
 /**
  *  This class will contain an implementation of an RecordWriter.
  *  See {@link OutputFormatContainer} for more information about containers.
  */
-abstract class RecordWriterContainer extends  RecordWriter<WritableComparable<?>, HCatRecord> {
+abstract class RecordWriterContainer extends RecordWriter<WritableComparable<?>, HCatRecord> {
 
-  private final org.apache.hadoop.mapred.RecordWriter<? super WritableComparable<?>, ? super Writable> baseRecordWriter;
+  private final FileSinkOperator.RecordWriter baseRecordWriter;
 
   /**
    * @param context current JobContext
    * @param baseRecordWriter RecordWriter that this instance will contain
    */
   public RecordWriterContainer(TaskAttemptContext context,
-                 org.apache.hadoop.mapred.RecordWriter<? super WritableComparable<?>, ? super Writable> baseRecordWriter) {
+       FileSinkOperator.RecordWriter baseRecordWriter) {
     this.baseRecordWriter = baseRecordWriter;
   }
 
   /**
    * @return underlying RecordWriter
    */
-  public org.apache.hadoop.mapred.RecordWriter getBaseRecordWriter() {
+  public FileSinkOperator.RecordWriter getBaseRecordWriter() {
     return baseRecordWriter;
   }
 
