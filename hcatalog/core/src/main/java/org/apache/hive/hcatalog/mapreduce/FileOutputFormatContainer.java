@@ -31,6 +31,7 @@ import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.metadata.Table;
@@ -60,6 +61,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 
 /**
  * File-based storage (ie RCFile, Text, etc) implementation of OutputFormatContainer.
@@ -121,13 +123,16 @@ class FileOutputFormatContainer extends OutputFormatContainer {
     } catch (ClassNotFoundException e) {
       throw new RuntimeException(e);
     }
+
+    Table table = new Table(jobInfo.getTableInfo().getTable());
+    TableDesc tableDesc = Utilities.getTableDesc(table);
+    System.err.println("\n--> FileOutputFormatContainer");
+    Properties tableProperties = tableDesc.getProperties();
+    tableProperties.list(System.err);
+
     FileSinkOperator.RecordWriter recordWriter =
         getBaseOutputFormat().getHiveRecordWriter(
-            jobConf,
-            childPath,
-            valueClass,
-            isCompressed,
-            jobInfo.getTableInfo().getStorerInfo().getProperties(),
+            jobConf, childPath, valueClass, isCompressed, tableProperties,
             InternalUtil.createReporter(context));
 
     return new StaticPartitionFileRecordWriterContainer(recordWriter, context);

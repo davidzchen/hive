@@ -24,8 +24,10 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.ql.metadata.Table;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.OutputCommitter;
@@ -39,6 +41,7 @@ import org.apache.hive.hcatalog.data.HCatRecord;
 
 import java.io.IOException;
 import java.text.NumberFormat;
+import java.util.Properties;
 
 /**
  * Bare bones implementation of OutputFormatContainer. Does only the required
@@ -87,13 +90,15 @@ class DefaultOutputFormatContainer extends OutputFormatContainer {
     } catch (ClassNotFoundException e) {
       throw new RuntimeException(e);
     }
+
+    Table table = new Table(jobInfo.getTableInfo().getTable());
+    TableDesc tableDesc = Utilities.getTableDesc(table);
+    System.err.println("\n--> DefaultOutputFormatContainer");
+    Properties tableProperties = tableDesc.getProperties();
+    tableProperties.list(System.err);
     FileSinkOperator.RecordWriter recordWriter =
         getBaseOutputFormat().getHiveRecordWriter(
-            new JobConf(conf),
-            childPath,
-            valueClass,
-            isCompressed,
-            jobInfo.getTableInfo().getStorerInfo().getProperties(),
+            new JobConf(conf), childPath, valueClass, isCompressed, tableProperties,
             InternalUtil.createReporter(context));
 
     return new DefaultRecordWriterContainer(context, recordWriter);

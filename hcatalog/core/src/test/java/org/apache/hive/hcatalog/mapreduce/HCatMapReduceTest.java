@@ -66,7 +66,6 @@ import org.apache.hive.hcatalog.data.schema.HCatSchema;
 import junit.framework.Assert;
 
 import org.junit.After;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.runner.RunWith;
@@ -102,16 +101,16 @@ public abstract class HCatMapReduceTest extends HCatBaseTest {
   protected String inputFormatClass;
   protected String outputFormatClass;
 
-  /**
-   * List of SerDe classes that the HCatalog core tests will not be run against.
-   */
-  public static final Set<String> DISABLED_SERDES = ImmutableSet.of(
-      AvroSerDe.class.getName(),
-      ParquetHiveSerDe.class.getName());
-
   @Parameterized.Parameters
   public static Collection<Object[]> generateParameters() {
-    return StorageFormats.asParameters();
+    List<Object[]> parameters = (List<Object[]>) StorageFormats.asParameters();
+
+    for (int i = 0; i < parameters.size(); i++) {
+      Object[] params = parameters.get(i);
+      System.err.println("[" + i + "] " + params[0]);
+    }
+
+    return parameters;
   }
 
   /**
@@ -119,6 +118,7 @@ public abstract class HCatMapReduceTest extends HCatBaseTest {
    */
   public HCatMapReduceTest(String name, String serdeClass, String inputFormatClass,
       String outputFormatClass) throws Exception {
+    System.err.println("\n==> " + name);
     this.serdeClass = serdeClass;
     this.inputFormatClass = inputFormatClass;
     this.outputFormatClass = outputFormatClass;
@@ -173,10 +173,6 @@ public abstract class HCatMapReduceTest extends HCatBaseTest {
 
   @Before
   public void createTable() throws Exception {
-    // Use Junit's Assume to skip running this fixture against any storage formats whose
-    // SerDe is in the disabled serdes list.
-    Assume.assumeTrue(!DISABLED_SERDES.contains(serdeClass));
-
     String databaseName = (dbName == null) ? MetaStoreUtils.DEFAULT_DATABASE_NAME : dbName;
     try {
       client.dropTable(databaseName, tableName);

@@ -410,12 +410,7 @@ public class HCatUtil {
                              String serDe,
                              String inputFormat,
                              String outputFormat)
-    throws IOException {
-
-    LOG.error("storageHandler: " + storageHandler);
-    LOG.error("serDe:          " + serDe);
-    LOG.error("inputFormat:    " + inputFormat);
-    LOG.error("outputFormat:   " + outputFormat);
+      throws IOException {
 
     if ((storageHandler == null) || (storageHandler.equals(FosterStorageHandler.class.getName()))) {
       try {
@@ -493,9 +488,10 @@ public class HCatUtil {
     Properties props = outputJobInfo.getTableInfo().getStorerInfo().getProperties();
     props.put(serdeConstants.SERIALIZATION_LIB, storageHandler.getSerDeClass().getName());
     TableDesc tableDesc = new TableDesc(storageHandler.getInputFormatClass(),
-      IgnoreKeyTextOutputFormat.class, props);
-    if (tableDesc.getJobProperties() == null)
+        IgnoreKeyTextOutputFormat.class, props);
+    if (tableDesc.getJobProperties() == null) {
       tableDesc.setJobProperties(new HashMap<String, String>());
+    }
     for (Map.Entry<String, String> el : conf) {
       tableDesc.getJobProperties().put(el.getKey(), el.getValue());
     }
@@ -507,13 +503,10 @@ public class HCatUtil {
 
     Map<String, String> jobProperties = new HashMap<String, String>();
     try {
-      tableDesc.getJobProperties().put(
-        HCatConstants.HCAT_KEY_OUTPUT_INFO,
-        HCatUtil.serialize(outputJobInfo));
+      tableDesc.getJobProperties().put(HCatConstants.HCAT_KEY_OUTPUT_INFO,
+          HCatUtil.serialize(outputJobInfo));
 
-      storageHandler.configureOutputJobProperties(tableDesc,
-        jobProperties);
-
+      storageHandler.configureOutputJobProperties(tableDesc, jobProperties);
       Map<String, String> tableJobProperties = tableDesc.getJobProperties();
       if (tableJobProperties != null) {
         if (tableJobProperties.containsKey(HCatConstants.HCAT_KEY_OUTPUT_INFO)) {

@@ -24,15 +24,18 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
-import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.hive.ql.io.HiveFileFormatUtils;
+import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
+import org.apache.hadoop.hive.ql.metadata.Table;
+import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.hive.serde2.SerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
@@ -226,9 +229,13 @@ class DynamicPartitionFileRecordWriterContainer extends FileRecordWriterContaine
       throw new RuntimeException(e);
     }
 
+    Table table = new Table(jobInfo.getTableInfo().getTable());
+    TableDesc tableDesc = Utilities.getTableDesc(table);
+    Properties tableProperties = tableDesc.getProperties();
+    System.err.println("\n--> DynamicPartitionFileRecordWriterContainer");
+    tableProperties.list(System.err);
     return baseOutputFormat.getHiveRecordWriter(
-        jobConf, path, valueClass, isCompressed,
-        jobInfo.getTableInfo().getStorerInfo().getProperties(),
+        jobConf, path, valueClass, isCompressed, tableProperties,
         progressable);
   }
 
